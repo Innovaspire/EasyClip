@@ -1,0 +1,45 @@
+[project]
+name = "easyclip"
+version = "0.1.0"
+description = "帧级精确视频切片工具，用于视频模型训练素材准备"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Innovaspire" }]
+dependencies = [
+    "pyside6>=6.6.0",
+    "numpy>=1.26.0",
+    "pillow>=10.0.0",
+]
+
+[project.scripts]
+easyclip = "easyclip.app:main"
+
+[project.optional-dependencies]
+dev = [
+    "pyinstaller>=6.0.0",
+    "pytest>=8.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.0.0",
+    "pytest>=8.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

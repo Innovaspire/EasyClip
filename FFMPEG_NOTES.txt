@@ -1,0 +1,17 @@
+FFmpeg third-party notice (EasyClip distribution)
+=================================================
+
+EasyClip (MIT) does NOT relicense FFmpeg.
+
+If you distribute FFmpeg alongside EasyClip (e.g. in a PyInstaller folder or installer):
+
+1. Identify the exact FFmpeg build you ship (version, compile flags, linked libraries).
+2. If the build is LGPL: include FFmpeg's LGPL license texts (e.g. COPYING.LGPLV2.1, COPYING.LGPLv3) and offer corresponding source as required by LGPL.
+3. If the build is GPL: your combined distribution may be subject to GPL copyleft; prefer LGPL-shared FFmpeg builds for broader compatibility, or omit FFmpeg and ask users to install it.
+4. Include upstream attribution and a link to https://ffmpeg.org/ and the matching source snapshot.
+
+EasyClip invokes ffmpeg/ffprobe as separate processes and does not link libav* into the Python wheel.
+
+Environment variables for custom paths:
+  EASYCLIP_FFMPEG   path to ffmpeg
+  EASYCLIP_FFPROBE  path to ffprobe (optional)

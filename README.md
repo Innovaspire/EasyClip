@@ -43,17 +43,26 @@ EasyClip is a video slicing tool designed for preparing training data for video 
 
 ## 安装与使用 / Installation & Usage
 
-- 当前仅支持 **Windows** / Currently, only **Windows** is supported.
-- 其他平台暂未适配 / Other platforms are not yet supported.
+### 方式一：下载 Release 使用 / Method 1: Download Release
 
-### 方式一：克隆仓库直接运行 / Method 1: Clone and Run
+前往 [Releases](https://github.com/Innovaspire/EasyClip/releases) 页面下载对应平台的打包程序，解压后即可直接运行。首次启动时若无 FFmpeg，程序会自动引导下载，无需手动配置。
+
+Go to the [Releases](https://github.com/Innovaspire/EasyClip/releases) page to download the packaged program for your platform. Extract and run directly. On first launch, if FFmpeg is missing, the app will guide you through an automatic download — no manual setup required.
+
+| 平台 / Platform | 架构 / Arch |
+|-----------------|-------------|
+| Windows | x64 |
+| macOS | ARM64 (Apple Silicon) |
+| Linux | x64 / ARM64 |
+
+### 方式二：克隆仓库运行（开发者）/ Method 2: Clone and Run (Developers)
 
 前置条件 / Prerequisites:
 
 - Python 3.12+
 - [uv](https://github.com/astral-sh/uv)
-- 需自行配置可用的 `ffmpeg` / `ffprobe` 于系统路径，或放置在`ffmpeg/`下  
-  You need to configure a working `ffmpeg` / `ffprobe` in your system PATH, or place them in the `ffmpeg/` directory.
+- FFmpeg / FFprobe 置于系统 PATH，或放在仓库 `ffmpeg/` 目录下  
+  FFmpeg / FFprobe available on system PATH, or placed in the repo `ffmpeg/` directory
 
 步骤 / Steps:
 
@@ -63,11 +72,6 @@ cd EasyClip
 uv sync
 uv run easyclip
 ```
-
-### 方式二：下载 Release 使用 / Method 2: Download Release
-
-前往 [Releases](https://github.com/Innovaspire/EasyClip/releases) 页面下载最新的打包程序，解压后即可直接运行。  
-Go to the [Releases](https://github.com/Innovaspire/EasyClip/releases) page to download the latest packaged program, extract it, and run it directly.
 
 ## 许可说明 / License
 

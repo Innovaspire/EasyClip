@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtCore import QPoint, QRect, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QToolTip, QWidget
 
 from easyclip.core.project import Clip
+from easyclip.core.theme import WidgetColors, on_theme_changed, widget_colors
 from easyclip.i18n.strings import tr
 
 RULER_H = 24
@@ -85,6 +86,7 @@ class TimelineWidget(QWidget):
         super().__init__(parent)
         self.setMouseTracking(True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self._wc = widget_colors()
         self._rmb_clip_idx: int | None = None
         self._rmb_last_x: float = 0.0
         self._rmb_drag_frac: float = 0.0
@@ -98,6 +100,11 @@ class TimelineWidget(QWidget):
         self._selected_clip_index: int | None = None
         self._hover_clip_index: int | None = None
         self.setMinimumHeight(RULER_H + 36)
+        on_theme_changed(self._on_theme_changed)
+
+    def _on_theme_changed(self, wc: WidgetColors) -> None:
+        self._wc = wc
+        self.update()
 
     def set_state(
         self,
@@ -253,9 +260,9 @@ class TimelineWidget(QWidget):
         ruler_rect = QRect(0, 0, w, RULER_H)
         track_rect = QRect(0, RULER_H, w, max(1, h - RULER_H))
 
-        painter.fillRect(ruler_rect, QColor(46, 46, 54))
-        painter.fillRect(track_rect, QColor(34, 34, 40))
-        painter.setPen(QPen(QColor(24, 24, 28)))
+        painter.fillRect(ruler_rect, self._wc.timeline_ruler_bg)
+        painter.fillRect(track_rect, self._wc.timeline_track_bg)
+        painter.setPen(QPen(self._wc.timeline_separator))
         painter.drawLine(0, RULER_H, w, RULER_H)
 
         ttot = max(1, self._total)
@@ -278,19 +285,19 @@ class TimelineWidget(QWidget):
 
         while f <= v_end:
             xi = self._x_for_frame(f)
-            painter.setPen(QPen(QColor(140, 140, 150)))
+            painter.setPen(QPen(self._wc.timeline_major_tick))
             painter.drawLine(xi, RULER_H - 8, xi, RULER_H)
             if use_frame_labels:
                 label = str(f)
             else:
                 label = _format_time_sec(f / self._fps)
-            painter.setPen(QPen(QColor(200, 200, 210)))
+            painter.setPen(QPen(self._wc.timeline_label))
             tw = painter.fontMetrics().horizontalAdvance(label)
             tx = max(2, min(w - tw - 2, xi - tw // 2))
             painter.drawText(tx, 14, label)
             f += major
 
-        painter.setPen(QPen(QColor(70, 70, 78)))
+        painter.setPen(QPen(self._wc.timeline_minor_tick))
         sub = max(1, major // 5)
         if major >= 10 and sub < major:
             g = (v0 // sub) * sub
@@ -395,18 +402,35 @@ class TimelineWidget(QWidget):
                     x += bw + 3
 
         cx = self._x_for_frame(self._current)
-        painter.setPen(QPen(QColor(255, 220, 80), 2))
+        painter.setPen(QPen(self._wc.playhead_color, 2))
         painter.drawLine(cx, RULER_H, cx, h)
 
         if self._sync_crosshair_frame is not None:
             hx = self._x_for_frame(self._sync_crosshair_frame)
             if 0 <= hx < w:
-                painter.setPen(QPen(QColor(255, 255, 255), 1))
+                painter.setPen(QPen(self._wc.crosshair_color, 1))
                 painter.drawLine(hx, 0, hx, h)
 
-        painter.setPen(QPen(QColor(100, 100, 110)))
+        painter.setPen(QPen(self._wc.timeline_border))
         painter.drawRect(0, 0, w - 1, h - 1)
         if self._view_span < self._total:
-            painter.setPen(QPen(QColor(120, 200, 255)))
-            painter.drawText(6, h - 4, "●")
+            painter.setPen(QPen(self._wc.timeline_viewport_dot))
+            painter.drawText(6, h - 4, "🔍")
 
+        # Arrow indicators when playhead is off-screen
+        arrow_size = 6
+        track_mid_y = (RULER_H + h) // 2
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(self._wc.playhead_color)
+        if cx < 0:
+            painter.drawPolygon([
+                QPoint(arrow_size, track_mid_y - arrow_size),
+                QPoint(0, track_mid_y),
+                QPoint(arrow_size, track_mid_y + arrow_size),
+            ])
+        elif cx > w:
+            painter.drawPolygon([
+                QPoint(w - arrow_size, track_mid_y - arrow_size),
+                QPoint(w, track_mid_y),
+                QPoint(w - arrow_size, track_mid_y + arrow_size),
+            ])

@@ -10,6 +10,8 @@ from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import QMessageBox
 
+from easyclip.core.settings import AppSettings
+from easyclip.core.theme import init_theme
 from easyclip.i18n.strings import tr
 from easyclip.widgets.main_window import MainWindow
 
@@ -41,26 +43,24 @@ def _resolve_app_icon() -> QIcon | None:
 
 
 def _ensure_ffmpeg_after_window_shown(window: MainWindow) -> None:
-    """Run frozen FFmpeg bootstrap after UI is visible; do not abort startup on failure."""
-    if not getattr(sys, "frozen", False):
-        return
-    # If ffmpeg is already resolvable (bundled or PATH), skip bootstrap entirely.
-    # This avoids unnecessary startup dialogs for users who already have a working setup.
+    """Run FFmpeg bootstrap after UI is visible (dev and frozen); do not abort startup on failure."""
     try:
-        from easyclip.core.ffmpeg_util import find_ffmpeg
+        from easyclip.core.ffmpeg_util import check_ffmpeg_runnable, find_ffmpeg
 
         ffmpeg, ffprobe = find_ffmpeg()
-        if ffmpeg and ffprobe:
+        ff_ok, _ = check_ffmpeg_runnable(ffmpeg)
+        fp_ok, _ = check_ffmpeg_runnable(ffprobe)
+        if ff_ok and fp_ok:
             return
     except Exception:
         pass
-    from easyclip.core.ffmpeg_bootstrap import ensure_bundled_ffmpeg_with_ui, skip_auto_download
+
+    from easyclip.core.ffmpeg_bootstrap import ensure_ffmpeg_with_ui, skip_auto_download
 
     if skip_auto_download():
         return
-    if ensure_bundled_ffmpeg_with_ui():
+    if ensure_ffmpeg_with_ui(window):
         return
-    # Keep app usable (e.g. settings / basic browsing) even if FFmpeg is unavailable.
     window.statusBar().showMessage(tr("ffmpeg.bootstrap.limited_status"), 15_000)
     QMessageBox.warning(
         window,
@@ -91,10 +91,97 @@ def _ensure_window_visible(window: MainWindow) -> None:
     window.activateWindow()
 
 
+def _fix_macos_app_name() -> None:
+    """Set the macOS application menu name to 'EasyClip' via Cocoa.
+
+    Changes both ``NSProcessInfo.processName`` (for ``ps`` / Activity Monitor)
+    and the application menu title (the item next to the Apple logo).
+
+    Uses ctypes ObjC bridge with explicit function-pointer casts for ARM64
+    (where ``objc_msgSend`` is not variadic and must be called with the
+    correct prototype for each argument count).
+    """
+    import ctypes
+    import ctypes.util
+
+    try:
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))  # type: ignore[arg-type]
+    except Exception:
+        return
+    try:
+        # -- base function types --
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+
+        # -- 2-arg objc_msgSend (id, sel) -> id --
+        _msg2 = objc.objc_msgSend
+        _msg2.restype = ctypes.c_void_p
+        _msg2.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
+        # -- 3-arg casts --
+        _MSG3_ID = ctypes.CFUNCTYPE(
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
+        )
+        _MSG3_STR = ctypes.CFUNCTYPE(
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p
+        )
+        _MSG3_VOID = ctypes.CFUNCTYPE(
+            None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
+        )
+        _msg3_id = ctypes.cast(objc.objc_msgSend, _MSG3_ID)
+        _msg3_str = ctypes.cast(objc.objc_msgSend, _MSG3_STR)
+        _msg3_void = ctypes.cast(objc.objc_msgSend, _MSG3_VOID)
+
+        NSString = objc.objc_getClass(b"NSString")
+        if not NSString:
+            return
+
+        # Create "EasyClip" NSString once, reuse below.
+        sel_str = objc.sel_registerName(b"stringWithUTF8String:")
+        name_easyclip = _msg3_str(NSString, sel_str, b"EasyClip")
+        if not name_easyclip:
+            return
+
+        # 1. Set NSProcessInfo.processName (affects ps / Activity Monitor / Dock).
+        NSProcessInfo = objc.objc_getClass(b"NSProcessInfo")
+        if NSProcessInfo:
+            pi = _msg2(NSProcessInfo, objc.sel_registerName(b"processInfo"))
+            if pi:
+                _msg3_void(pi, objc.sel_registerName(b"setProcessName:"), name_easyclip)
+
+        # 2. Rename the application menu item (what actually shows next to the Apple logo).
+        NSApp_cls = objc.objc_getClass(b"NSApplication")
+        if NSApp_cls:
+            nsapp = _msg2(NSApp_cls, objc.sel_registerName(b"sharedApplication"))
+            if nsapp:
+                main_menu = _msg2(nsapp, objc.sel_registerName(b"mainMenu"))
+                if main_menu:
+                    app_menu_item = _msg3_id(
+                        main_menu, objc.sel_registerName(b"itemAtIndex:"), 0
+                    )
+                    if app_menu_item:
+                        _msg3_void(
+                            app_menu_item,
+                            objc.sel_registerName(b"setTitle:"),
+                            name_easyclip,
+                        )
+    except Exception:
+        pass
+
+
 def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("EasyClip")
+    app.setApplicationDisplayName("EasyClip")
     app.setOrganizationName("Innovaspire")
+
+    if sys.platform == "darwin":
+        _fix_macos_app_name()
+
+    settings = AppSettings()
+    init_theme(settings.theme())
     app_icon = _resolve_app_icon()
     if app_icon is not None:
         app.setWindowIcon(app_icon)

@@ -1,41 +1,78 @@
-name: Release Build
+name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
-    permissions:
-      contents: write
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+            platform: macos-arm64
+          - os: windows-latest
+            arch: x64
+            platform: windows-x64
+          - os: ubuntu-24.04
+            arch: x64
+            platform: linux-x64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            platform: linux-arm64
+    runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
 
-      - name: Set up Python
+      - name: Install Python
         run: uv python install 3.12
 
-      - name: Build Release
+      - name: Build and archive (Unix)
+        if: runner.os != 'Windows'
+        env:
+          EASYCLIP_VERSION: ${{ github.ref_name }}
         run: |
-          powershell -File scripts/build_release.ps1
-        shell: pwsh
+          bash scripts/build_release.sh "$EASYCLIP_VERSION" "${{ matrix.platform }}"
 
-      - name: Archive production artifacts
+      - name: Build and archive (Windows)
+        if: runner.os == 'Windows'
+        env:
+          EASYCLIP_VERSION: ${{ github.ref_name }}
         run: |
-          Compress-Archive -Path dist/easyclip/* -DestinationPath easyclip-windows.zip
+          pwsh -File scripts/build_release.ps1 -Version "$env:EASYCLIP_VERSION" -Platform "${{ matrix.platform }}"
 
-      - name: Create Release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EasyClip-${{ matrix.platform }}
+          path: dist/EasyClip-*.*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: EasyClip-*
+          merge-multiple: true
+          path: dist/
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: easyclip-windows.zip
-          name: Release ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: dist/*
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true

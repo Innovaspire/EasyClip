@@ -19,6 +19,10 @@ MESSAGES: dict[str, dict[str, str]] = {
     "menu.quit": {"zh_CN": "退出", "en_US": "Quit"},
     "menu.help": {"zh_CN": "帮助", "en_US": "Help"},
     "menu.about": {"zh_CN": "关于", "en_US": "About"},
+    "dialog.about_text": {
+        "zh_CN": "EasyClip {version}\n\nMIT License — 详见 LICENSE 文件\nFFmpeg 不属于 MIT 授权范围；分发时请附带 LGPL 构建及声明。",
+        "en_US": "EasyClip {version}\n\nMIT License — see LICENSE\nFFmpeg is not part of MIT; bundle LGPL builds and notices.",
+    },
     "open_video": {"zh_CN": "打开视频", "en_US": "Open video"},
     "drop.replace.title": {"zh_CN": "替换当前视频？", "en_US": "Replace current video?"},
     "drop.replace.body": {
@@ -28,6 +32,7 @@ MESSAGES: dict[str, dict[str, str]] = {
     "drop.replace.save": {"zh_CN": "保存并打开", "en_US": "Save, then open"},
     "drop.replace.discard": {"zh_CN": "不保存并打开", "en_US": "Open without saving"},
     "drop.replace.cancel": {"zh_CN": "取消", "en_US": "Cancel"},
+    "drop.hint": {"zh_CN": "拖放视频文件到此处", "en_US": "Drop a video file here"},
     "waveform.ui.loading": {"zh_CN": "波形加载中…", "en_US": "Loading waveform…"},
     "waveform.ui.none": {"zh_CN": "无音频波形", "en_US": "No audio waveform"},
     "waveform.ui.empty": {"zh_CN": "—", "en_US": "—"},
@@ -219,7 +224,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh_CN": "，",
         "en_US": ", ",
     },
-    "settings.align_preset": {"zh_CN": "帧数对齐（导出）", "en_US": "Frame alignment (export)"},
+    "settings.align_preset": {"zh_CN": "帧数对齐（导出）", "en_US": "Frame Alignment (Export)"},
     "export.align_warn.floor_fallback_minimum": {
         "zh_CN": "向下取整时低于最小合法长度，已使用最小合法输出帧数。",
         "en_US": "Floor requested a length below the minimum valid; used the smallest valid frame count.",
@@ -326,11 +331,15 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     "settings.title": {"zh_CN": "设置", "en_US": "Settings"},
     "settings.tab.general": {"zh_CN": "常规", "en_US": "General"},
-    "settings.tab.export_defaults": {"zh_CN": "导出参数预设", "en_US": "Export parameter presets"},
+    "settings.tab.export_defaults": {"zh_CN": "导出参数预设", "en_US": "Export Parameter Presets"},
     "settings.lang": {"zh_CN": "语言", "en_US": "Language"},
     "settings.lang.zh_CN": {"zh_CN": "简体中文", "en_US": "简体中文"},
     "settings.lang.en_US": {"zh_CN": "English", "en_US": "English"},
-    "settings.project_dir": {"zh_CN": "项目目录", "en_US": "Project directory"},
+    "settings.theme": {"zh_CN": "主题", "en_US": "Theme"},
+    "settings.theme.system": {"zh_CN": "跟随系统", "en_US": "Follow system"},
+    "settings.theme.light": {"zh_CN": "浅色", "en_US": "Light"},
+    "settings.theme.dark": {"zh_CN": "深色", "en_US": "Dark"},
+    "settings.project_dir": {"zh_CN": "项目目录", "en_US": "Project Directory"},
     "settings.mode.home": {"zh_CN": "用户目录 ~/.easyclip/projects", "en_US": "User home ~/.easyclip/projects"},
     "settings.mode.source": {"zh_CN": "源文件旁", "en_US": "Next to source file"},
     "settings.mode.exe": {"zh_CN": "可执行文件旁", "en_US": "Next to executable"},
@@ -340,7 +349,7 @@ MESSAGES: dict[str, dict[str, str]] = {
     "settings.playback_seek_seconds": {"zh_CN": "快进 / 快退秒数", "en_US": "Fast-forward / rewind duration (seconds)"},
     "settings.playback_seek_seconds_suffix": {"zh_CN": " 秒", "en_US": " s"},
     "settings.export_fps": {"zh_CN": "导出帧率（恒定 CFR）", "en_US": "Export FPS (constant CFR)"},
-    "settings.startup_behavior": {"zh_CN": "启动时加载", "en_US": "On startup"},
+    "settings.startup_behavior": {"zh_CN": "启动时加载", "en_US": "On Startup"},
     "settings.startup.ask": {"zh_CN": "每次询问", "en_US": "Ask every time"},
     "settings.startup.do_nothing": {"zh_CN": "无", "en_US": "Do nothing"},
     "settings.startup.auto_load": {
@@ -415,12 +424,12 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en_US": "Export all clips (strong correction) is experimental and may noticeably alter audio pacing or compatibility. Also, strong correction uses accurate output seek which is slower, and progress may appear stuck for a long time. Please be patient. Continue?",
     },
     "export.options.title": {"zh_CN": "导出参数", "en_US": "Export options"},
-    "export.options.quick_preset": {"zh_CN": "快速加载预设", "en_US": "Quick preset"},
+    "export.options.quick_preset": {"zh_CN": "快速加载预设", "en_US": "Quick Preset"},
     "export.options.quick_preset.placeholder": {"zh_CN": "选择预设…", "en_US": "Select preset…"},
     "export.options.inherit_fps": {"zh_CN": "继承帧率", "en_US": "Inherit FPS"},
     "export.options.inherit_fps_value": {"zh_CN": "将继承：{fps}", "en_US": "Will inherit: {fps}"},
     "export.options.inherit_fps_inline": {"zh_CN": "继承帧率（{fps}）", "en_US": "Inherit FPS ({fps})"},
-    "export.filename_template.label": {"zh_CN": "导出文件名模板", "en_US": "Export filename template"},
+    "export.filename_template.label": {"zh_CN": "导出文件名模板", "en_US": "Export Filename Template"},
     "export.filename_template.placeholder": {
         "zh_CN": "{source_name}_{clip_index:03d}",
         "en_US": "{source_name}_{clip_index:03d}",
@@ -431,7 +440,7 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     "export.filename_template.help.title": {
         "zh_CN": "导出文件名模板说明",
-        "en_US": "Export filename template help",
+        "en_US": "Export Filename Template Help",
     },
     "export.filename_template.help.body": {
         "zh_CN": "变量清单（含含义）\n"
@@ -469,8 +478,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "{job_ts}: export job Unix timestamp (seconds)\n"
         "{job_tc}: export job timecode (YYYY-MM-DD_HH-MM-SS)",
     },
-    "export.options.encoder": {"zh_CN": "视频编码器", "en_US": "Video encoder"},
-    "export.options.rate_mode": {"zh_CN": "码率控制", "en_US": "Rate control"},
+    "export.options.encoder": {"zh_CN": "视频编码器", "en_US": "Video Encoder"},
+    "export.options.rate_mode": {"zh_CN": "码率控制", "en_US": "Rate Control"},
     "export.options.rate_mode.bitrate": {"zh_CN": "按码率", "en_US": "Bitrate"},
     "export.options.bitrate_match_source": {
         "zh_CN": "与源视频码率一致",
@@ -514,7 +523,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en_US": "Requested codec unavailable; fallback: {requested} -> {resolved}",
     },
     "export.options.resolution": {"zh_CN": "分辨率", "en_US": "Resolution"},
-    "export.options.content_resolution": {"zh_CN": "内容分辨率", "en_US": "Content resolution"},
+    "export.options.content_resolution": {"zh_CN": "内容分辨率", "en_US": "Content Resolution"},
     "export.options.content_resolution_tip": {
         "zh_CN": "这里的分辨率数值已按 SAR 校正为 PAR 1:1，在此处设置的分辨率会进行拉伸处理。",
         "en_US": "These resolution values are SAR-corrected to PAR 1:1. Resolution changes here are applied by scaling (stretch/resize).",
@@ -539,7 +548,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh_CN": "此处设置的分辨率以上方设置的「内容分辨率」为基准，进行裁切/黑边，不会进行拉伸。",
         "en_US": "Resolution constraints here are based on the Content Resolution set above, applied via cropping/padding, not scaling.",
     },
-    "export.options.edge_adjust.title": {"zh_CN": "倍数冲突处理", "en_US": "Multiple conflict handling"},
+    "export.options.edge_adjust.title": {"zh_CN": "倍数冲突处理", "en_US": "Multiple Conflict Handling"},
     "export.options.edge_adjust.hint": {
         "zh_CN": "正数表示增加黑边，负数表示裁切像素。",
         "en_US": "Positive values add black padding; negative values crop pixels.",
@@ -593,10 +602,16 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en_US": "FFmpeg preview: -c:v {codec} -b:v {bitrate}k | -fps_mode {fps_mode}\n-vf {vf}\n-af {af}",
     },
     "export.failed": {"zh_CN": "导出失败", "en_US": "Export failed"},
+    "export.failed_detail": {
+        "zh_CN": "FFmpeg 返回了以下错误信息（可选中复制）：",
+        "en_US": "FFmpeg returned the following error (selectable, copyable):",
+    },
+    "export.copy_error": {"zh_CN": "复制错误信息", "en_US": "Copy error"},
+    "dialog.ok": {"zh_CN": "确定", "en_US": "OK"},
     "ffmpeg.bootstrap.title": {"zh_CN": "FFmpeg", "en_US": "FFmpeg"},
     "ffmpeg.bootstrap.downloading": {
-        "zh_CN": "正在下载 FFmpeg（LGPL 预编译包）…",
-        "en_US": "Downloading FFmpeg (LGPL build)…",
+        "zh_CN": "正在下载 FFmpeg（预编译包）…",
+        "en_US": "Downloading FFmpeg (prebuilt package)…",
     },
     "ffmpeg.bootstrap.mb": {"zh_CN": "已传输约 {mb} MB", "en_US": "Downloaded ~{mb} MB"},
     "ffmpeg.bootstrap.failed_title": {"zh_CN": "无法获取 FFmpeg", "en_US": "Could not obtain FFmpeg"},
@@ -608,6 +623,50 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh_CN": "下载已完成，但在程序目录下的 ffmpeg 文件夹未找到 ffmpeg/ffprobe，请手动放置或检查权限。",
         "en_US": "Download finished, but ffmpeg/ffprobe were not found in the app's ffmpeg folder. Check permissions or install manually.",
     },
+    "ffmpeg.bootstrap.not_found_title": {
+        "zh_CN": "未找到 FFmpeg",
+        "en_US": "FFmpeg not found",
+    },
+    "ffmpeg.bootstrap.not_found_body": {
+        "zh_CN": "需要 FFmpeg 才能打开视频和导出片段。是否自动下载到程序目录？\n\n（不会修改系统文件。）",
+        "en_US": "FFmpeg is required to open videos and export clips. Download it to the app directory?\n\n(Will not modify system files.)",
+    },
+    "ffmpeg.bootstrap.arch_mismatch_app_body": {
+        "zh_CN": "程序目录中的 FFmpeg 与当前 CPU 架构不匹配，无法运行。是否下载正确版本？",
+        "en_US": "The FFmpeg in the app directory does not match your CPU architecture. Download a compatible version?",
+    },
+    "ffmpeg.bootstrap.arch_mismatch_system_title": {
+        "zh_CN": "系统 FFmpeg 架构不匹配",
+        "en_US": "System FFmpeg architecture mismatch",
+    },
+    "ffmpeg.bootstrap.arch_mismatch_system_body": {
+        "zh_CN": "系统 PATH 中的 FFmpeg（{path}）与当前 CPU 架构不匹配。\n\n不会修改系统文件。是否下载正确版本到程序目录？",
+        "en_US": "The FFmpeg on your system PATH ({path}) does not match your CPU architecture.\n\nSystem files will not be modified. Download a compatible version to the app directory?",
+    },
+    "ffmpeg.bootstrap.network_error_title": {
+        "zh_CN": "网络不可用",
+        "en_US": "Network unavailable",
+    },
+    "ffmpeg.bootstrap.network_error_body": {
+        "zh_CN": "无法下载 FFmpeg：{detail}\n\n请检查网络连接后重试，或手动将 ffmpeg / ffprobe 放置到程序目录下的 ffmpeg 文件夹。",
+        "en_US": "Cannot download FFmpeg: {detail}\n\nCheck your network and try again, or manually place ffmpeg / ffprobe into the app's ffmpeg folder.",
+    },
+    "ffmpeg.bootstrap.download_confirm": {
+        "zh_CN": "下载",
+        "en_US": "Download",
+    },
+    "ffmpeg.bootstrap.download_skip": {
+        "zh_CN": "跳过",
+        "en_US": "Skip",
+    },
+    "ffmpeg.bootstrap.macos_downloading_ffmpeg": {
+        "zh_CN": "正在下载 ffmpeg…",
+        "en_US": "Downloading ffmpeg…",
+    },
+    "ffmpeg.bootstrap.macos_downloading_ffprobe": {
+        "zh_CN": "正在下载 ffprobe…",
+        "en_US": "Downloading ffprobe…",
+    },
     "ffmpeg.bootstrap.manual_title": {"zh_CN": "手动安装 FFmpeg", "en_US": "Install FFmpeg manually"},
     "ffmpeg.bootstrap.manual_body": {
         "zh_CN": "请将 ffmpeg 与 ffprobe 可执行文件放到本程序目录下的 ffmpeg 文件夹，或安装到系统 PATH。\n\n"
@@ -616,6 +675,26 @@ MESSAGES: dict[str, dict[str, str]] = {
         "en_US": "Place ffmpeg and ffprobe in this application's ffmpeg folder, or install them on your PATH.\n\n"
         "Suggested source (LGPL): https://github.com/BtbN/FFmpeg-Builds/releases\n\n"
         "See FFMPEG_NOTES.txt in the repository for compliance notes.",
+    },
+    "ffmpeg.bootstrap.brew_title": {
+        "zh_CN": "通过 Homebrew 安装",
+        "en_US": "Install via Homebrew",
+    },
+    "ffmpeg.bootstrap.brew_available_body": {
+        "zh_CN": "是否通过 Homebrew 安装 FFmpeg？\n\n执行命令：brew install ffmpeg\n\n安装后请重启程序。",
+        "en_US": "Install FFmpeg via Homebrew?\n\nCommand: brew install ffmpeg\n\nRestart the application after installation.",
+    },
+    "ffmpeg.bootstrap.brew_not_installed_body": {
+        "zh_CN": "未检测到 Homebrew。\n\n是否打开终端安装 Homebrew？\n\n安装命令：\n/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"\n\n安装 Homebrew 后，可执行 brew install ffmpeg 安装 FFmpeg。",
+        "en_US": "Homebrew is not installed.\n\nOpen Terminal to install Homebrew?\n\nCommand:\n/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"\n\nAfter installing Homebrew, run: brew install ffmpeg",
+    },
+    "ffmpeg.bootstrap.open_terminal": {
+        "zh_CN": "打开终端",
+        "en_US": "Open Terminal",
+    },
+    "ffmpeg.bootstrap.install_restart": {
+        "zh_CN": "FFmpeg 安装完成。请重启程序以识别新安装的 FFmpeg。",
+        "en_US": "FFmpeg installed. Please restart the application to use it.",
     },
     "ffmpeg.bootstrap.limited_title": {
         "zh_CN": "FFmpeg 未就绪",
@@ -672,7 +751,7 @@ MESSAGES: dict[str, dict[str, str]] = {
     "undo.action.nudge_clip": {"zh_CN": "微调片段", "en_US": "Nudge clip"},
     "undo.action.drag_clip": {"zh_CN": "拖拽片段", "en_US": "Drag clip"},
     "undo.action.nudge_boundary": {"zh_CN": "微调边界", "en_US": "Nudge boundary"},
-    "settings.undo_max_steps": {"zh_CN": "最大撤销步数", "en_US": "Max undo steps"},
+    "settings.undo_max_steps": {"zh_CN": "最大撤销步数", "en_US": "Max Undo Steps"},
 }
 
 

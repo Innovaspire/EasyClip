@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec: run from repo root — pyinstaller packaging/easyclip.spec"""
-
+import os
+import sys
 from pathlib import Path
 
 block_cipher = None
@@ -8,19 +9,21 @@ block_cipher = None
 # SPECPATH = directory containing this spec (e.g. .../EasyClip/packaging)
 ROOT = Path(SPECPATH).resolve().parent
 SRC = ROOT / "src"
-APP_ICON = ROOT / "packaging" / "app.ico"
+APP_ICO = ROOT / "packaging" / "app.ico"
+APP_ICNS = ROOT / "packaging" / "app.icns"
+
+VERSION = os.environ.get("EASYCLIP_VERSION", "0.0.0").lstrip("v")
 
 a = Analysis(
     [str(ROOT / "main.py")],
     pathex=[str(SRC)],
     binaries=[],
-    datas=[(str(APP_ICON), ".")] if APP_ICON.is_file() else [],
+    datas=[],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        # EasyClip uses QWidget + QtMultimedia; explicitly exclude WebEngine stack.
         "PySide6.QtWebEngineCore",
         "PySide6.QtWebEngineQuick",
         "PySide6.QtWebEngineWidgets",
@@ -44,7 +47,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,
-    icon=str(APP_ICON) if APP_ICON.is_file() else None,
+    icon=str(APP_ICO) if APP_ICO.is_file() else None,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -62,3 +65,17 @@ coll = COLLECT(
     upx_exclude=[],
     name="easyclip",
 )
+
+if sys.platform == "darwin":
+    app = BUNDLE(
+        coll,
+        name="EasyClip.app",
+        icon=str(APP_ICNS) if APP_ICNS.is_file() else None,
+        bundle_identifier="com.innovaspire.easyclip",
+        info_plist={
+            "CFBundleShortVersionString": VERSION,
+            "CFBundleVersion": VERSION,
+            "LSMinimumSystemVersion": "11.0",
+            "NSHighResolutionCapable": True,
+        },
+    )

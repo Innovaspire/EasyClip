@@ -1,4 +1,10 @@
 # Build EasyClip with PyInstaller (onedir). Run from repo root.
+param(
+    [Parameter(Mandatory=$false)]
+    [string]$Version = "0.0.0",
+    [Parameter(Mandatory=$false)]
+    [string]$Platform = "unknown"
+)
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot\..
 ${iconPath} = Join-Path (Get-Location) "packaging\app.ico"
@@ -37,3 +43,19 @@ if ($winOk) {
 }
 Write-Host "Output: dist/easyclip/"
 Write-Host "Bundled FFmpeg location: dist/easyclip/ffmpeg/"
+
+# Archive with parent folder
+$VersionClean = $Version -replace '^v', ''
+$Parent = "EasyClip-v${VersionClean}"
+$ArchiveName = "EasyClip-v${VersionClean}-${Platform}"
+$Staging = Join-Path (Get-Location) "dist\$Parent"
+
+Remove-Item -Recurse -Force $Staging -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $Staging | Out-Null
+Copy-Item -Recurse -Path (Join-Path (Get-Location) "dist\easyclip\*") -Destination $Staging -Force
+
+Push-Location dist
+Compress-Archive -Path $Parent -DestinationPath "${ArchiveName}.zip" -Force
+Pop-Location
+
+Write-Host "Archive: dist/${ArchiveName}.zip"

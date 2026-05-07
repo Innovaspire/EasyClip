@@ -46,6 +46,32 @@ def _subprocess_platform_flags() -> dict[str, Any]:
     return extra
 
 
+_FFPROBE_RUNNABLE_TIMEOUT_SEC = 5
+
+
+def check_ffmpeg_runnable(ffmpeg_path: str) -> tuple[bool, str | None]:
+    """Check whether a ffmpeg binary can execute on this machine.
+
+    Returns ``(True, None)`` if the binary runs successfully (returncode 0).
+    Returns ``(False, reason)`` otherwise, where *reason* is one of:
+    ``"arch_mismatch"``, ``"timeout"``, ``"nonzero_exit"``.
+    """
+    try:
+        proc = subprocess.run(
+            [ffmpeg_path, "-version"],
+            capture_output=True,
+            timeout=_FFPROBE_RUNNABLE_TIMEOUT_SEC,
+            **_subprocess_platform_flags(),
+        )
+        if proc.returncode == 0:
+            return True, None
+        return False, "nonzero_exit"
+    except subprocess.TimeoutExpired:
+        return False, "timeout"
+    except OSError:
+        return False, "arch_mismatch"
+
+
 def _pair_in_dir(d: Path) -> tuple[str, str] | None:
     for ff_name, pr_name in (("ffmpeg.exe", "ffprobe.exe"), ("ffmpeg", "ffprobe")):
         ffc, prb = d / ff_name, d / pr_name
@@ -54,24 +80,26 @@ def _pair_in_dir(d: Path) -> tuple[str, str] | None:
     return None
 
 
-def _repo_vendor_pair() -> tuple[str, str] | None:
-    """Optional ``<repo>/vendor`` pair (``ffmpeg_util`` lives under ``src/easyclip/core``)."""
+def _repo_root() -> Path | None:
     try:
-        root = Path(__file__).resolve().parents[3]
+        return Path(__file__).resolve().parents[3]
     except IndexError:
         return None
-    return _pair_in_dir(root / "vendor")
+
+
+def _repo_pair_in(subdir: str) -> tuple[str, str] | None:
+    root = _repo_root()
+    if root is None:
+        return None
+    return _pair_in_dir(root / subdir)
 
 
 def find_ffmpeg() -> tuple[str, str]:
     """Return (ffmpeg, ffprobe) executable paths.
 
-    **Frozen (打包)**：优先 ``<exe-dir>/ffmpeg`` 子目录（自带或启动时下载的 ffmpeg/ffprobe），
-    兼容旧版本也会回退检查 **可执行文件所在目录**；
-    避免与系统环境中的其他 FFmpeg 配置混用。
-
-    非 frozen（开发）与 frozen 的后续查找统一为：仓库 ``vendor/`` → **PATH**。
-    不再读取 ``EASYCLIP_FFMPEG`` / ``EASYCLIP_FFPROBE`` / ``EASYCLIP_FFMPEG_BIN_DIR``。
+    Resolution order:
+    - Frozen: ``<exe>/ffmpeg/`` → ``<exe>/`` → repo ``vendor/`` → repo ``ffmpeg/`` → PATH
+    - Dev:    repo ``vendor/`` → repo ``ffmpeg/`` → PATH
     """
     if getattr(sys, "frozen", False):
         base = Path(sys.executable).resolve().parent
@@ -84,7 +112,10 @@ def find_ffmpeg() -> tuple[str, str]:
             logger.info("Using FFmpeg next to executable: %s", pair[0])
             return pair
 
-    pair = _repo_vendor_pair()
+    pair = _repo_pair_in("ffmpeg")
+    if pair:
+        return pair
+    pair = _repo_pair_in("vendor")
     if pair:
         return pair
 
@@ -548,6 +579,9 @@ def _run_ffmpeg_pipe_progress(
             )
         drainer.start()
         state: dict[str, str] = {}
+        # Track whether we have ever received real progress data (frame > 0 or time > 0).
+        # Until then, recv timeouts emit synthetic seeking ticks so the UI shows "Decoding…".
+        _got_real_progress = False
         try:
             if use_tcp_progress and listen_sock is not None:
                 assert listen_sock is not None  # narrow for type checkers
@@ -573,6 +607,11 @@ def _run_ffmpeg_pipe_progress(
                                     returncode=proc.returncode,
                                 )
                                 return proc.returncode, "".join(err_lines)
+                            # FFmpeg is alive but hasn't connected yet — it is likely
+                            # decoding from the start of the file (output-seek mode).
+                            # Emit a synthetic seeking tick so the UI can show feedback.
+                            if on_progress is not None:
+                                on_progress(FfmpegEncodeProgress(0.0, 0, is_seeking=True))
                 finally:
                     try:
                         listen_sock.close()
@@ -597,10 +636,14 @@ def _run_ffmpeg_pipe_progress(
                         except (socket.timeout, TimeoutError):
                             if proc.poll() is not None:
                                 break
+                            # No data yet — if we haven't seen real progress, still decoding.
+                            if not _got_real_progress and on_progress is not None:
+                                on_progress(FfmpegEncodeProgress(0.0, 0, is_seeking=True))
                             continue
                         except OSError:
                             break
                         if chunk:
+                            _got_real_progress = True
                             pending_text += chunk.decode("utf-8", errors="replace")
                             pending_text, _ = _drain_progress_text_buffer(
                                 pending_text,

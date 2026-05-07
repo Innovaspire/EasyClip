@@ -13,7 +13,18 @@ if str(SRC) not in sys.path:
 
 
 def main() -> None:
-    from easyclip.core.ffmpeg_bootstrap import bundle_spec_for_platform, fetch_vendor_directory
+    from easyclip.core.ffmpeg_bootstrap import (
+        bundle_spec_for_platform,
+        download_macos_vendor,
+        fetch_vendor_directory,
+    )
+
+    if sys.platform == "darwin":
+        dest = ROOT / "vendor"
+        dest.mkdir(parents=True, exist_ok=True)
+        download_macos_vendor(dest)
+        print("vendor (macOS):", dest)
+        return
 
     if bundle_spec_for_platform() is None:
         print("fetch_ffmpeg_vendor: skipped (no BtbN manifest for this OS)", file=sys.stderr)

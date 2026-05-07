@@ -1,6 +1,6 @@
 [project]
 name = "easyclip"
-version = "0.1.0"
+dynamic = ["version"]
 description = "帧级精确视频切片工具，用于视频模型训练素材准备"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -30,6 +30,9 @@ dev = [
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = {attr = "easyclip._version.__version__"}
 
 [tool.setuptools.package-dir]
 "" = "src"

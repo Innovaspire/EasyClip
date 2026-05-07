@@ -1,3 +1,3 @@
 """EasyClip — frame-accurate video clipping for model training."""
 
-__version__ = "0.1.0"
+from easyclip._version import __version__  # noqa: F401

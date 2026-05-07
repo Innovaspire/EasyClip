@@ -115,6 +115,14 @@ from easyclip.core.settings import (
     StartupBehavior,
     default_projects_root,
 )
+from easyclip.core.theme import (
+    Theme,
+    WidgetColors,
+    current_theme,
+    on_theme_changed,
+    set_theme,
+    widget_colors,
+)
 from easyclip.core.timebase import Timebase
 from easyclip.core.waveform_gen import (
     STREAM_SAMPLE_RATE,
@@ -143,6 +151,13 @@ VIDEO_OPEN_SUFFIXES = frozenset(
         ".mpg",
     }
 )
+
+def _fit_combo_width(combo: QComboBox, *, min_w: int = 0, max_w: int = 460) -> None:
+    """Set ``combo`` minimum width so its widest item fits without eliding."""
+    fm = combo.fontMetrics()
+    widest = max((fm.horizontalAdvance(combo.itemText(i)) for i in range(combo.count())), default=0)
+    combo.setMinimumWidth(max(min_w, min(max_w, widest + 52)))
+
 
 # For very long/high-bitrate sources, eager full keyframe scan can heavily contend with
 # preview decode/waveform generation and make UI appear frozen on slower disks.
@@ -295,6 +310,26 @@ class _ExportUIBridge(QObject):
 
     clip_meta = Signal(int, int, int, float)
     stderr_line = Signal(str)
+
+
+_ENCODER_DISPLAY_KEY = {
+    "libx264": "export.options.encoder.libx264",
+    "libopenh264": "export.options.encoder.libopenh264",
+    "mpeg4": "export.options.encoder.mpeg4",
+    "h264_nvenc": "export.options.encoder.h264_nvenc",
+    "hevc_nvenc": "export.options.encoder.hevc_nvenc",
+    "h264_amf": "export.options.encoder.h264_amf",
+    "hevc_amf": "export.options.encoder.hevc_amf",
+    "h264_qsv": "export.options.encoder.h264_qsv",
+    "hevc_qsv": "export.options.encoder.hevc_qsv",
+}
+
+
+def _encoder_display_name(key: str) -> str:
+    label_key = _ENCODER_DISPLAY_KEY.get(key)
+    if label_key:
+        return tr(label_key)
+    return key
 
 
 @dataclass(frozen=True)
@@ -519,6 +554,8 @@ class MainWindow(QMainWindow):
         self._seek_after_source_ready = False
         self._view_start = 0
         self._view_span = max(1, self._tb.total_frames)
+        self._pinch_accumulator: float = 0.0
+        self._pinch_anchor_frame: float = 0.0
         self._timeline_clip_drag_dirty = False
         self._thumb_request_id = 0
         self._thumb_cache_max = 256
@@ -545,9 +582,11 @@ class MainWindow(QMainWindow):
         self._player.setVideoOutput(self._video_widget)
         self._preview_label = QLabel(self)
         self._preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview_label.setStyleSheet("background:#111;color:#888;")
-        self._preview_label.hide()
+        self._preview_label.setStyleSheet(widget_colors().preview_label_ss)
+        self._preview_label.setText(tr("drop.hint"))
+        self._preview_label.show()
         # QVideoWidget 内部有原生视频层，兄弟 QWidget 会被压在下面；拖放/鼠标由「子控件」接（见 VideoPreviewDropShim）
+        self._video_widget.hide()
         self._video_drop_host = QWidget(self)
         _vdh = QGridLayout(self._video_drop_host)
         _vdh.setContentsMargins(0, 0, 0, 0)
@@ -740,7 +779,7 @@ class MainWindow(QMainWindow):
         self._thumb_duration_label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        self._thumb_duration_label.setStyleSheet("color:#b8b8b8;")
+        self._thumb_duration_label.setStyleSheet(widget_colors().thumb_duration_ss)
         thumb_head.addWidget(self._thumb_duration_label)
         right_thumb.addLayout(thumb_head)
         right_thumb.addWidget(self._thumb_start)
@@ -769,7 +808,7 @@ class MainWindow(QMainWindow):
         self._source_path_label = _ClickableLabel(self)
         self._source_path_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._source_path_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._source_path_label.setStyleSheet("color:#a8a8a8; padding: 2px 0;")
+        self._source_path_label.setStyleSheet(widget_colors().source_path_ss)
         self._source_path_label.clicked.connect(self._toggle_source_path_display)
         self._source_path_label.setToolTip(tr("source_path.toggle_tooltip"))
         self._refresh_source_path_label()
@@ -821,10 +860,7 @@ class MainWindow(QMainWindow):
         self._preview_wave_split.setHandleWidth(8)
         self._preview_wave_split.setCollapsible(0, False)
         self._preview_wave_split.setCollapsible(1, False)
-        self._preview_wave_split.setStyleSheet(
-            "QSplitter::handle { background: #4a4a52; } "
-            "QSplitter::handle:hover { background: #5c8a9a; }"
-        )
+        self._preview_wave_split.setStyleSheet(widget_colors().splitter_ss)
         top.setMinimumHeight(120)
         self._pw_split_sizes_inited = False
         self._pw_split_save_timer = QTimer(self)
@@ -841,6 +877,7 @@ class MainWindow(QMainWindow):
         root.addLayout(mark_row)
         self._btn_export_sidebar = QPushButton(tr("toolbar.export_all"))
         self._btn_export_sidebar.clicked.connect(self._export_clips)
+        self._btn_export_sidebar.setEnabled(False)
         export_row = QHBoxLayout()
         export_row.addStretch()
         export_row.addWidget(self._btn_quick_slice_1)
@@ -877,6 +914,7 @@ class MainWindow(QMainWindow):
 
         self._build_menu()
         self._install_shortcuts()
+        on_theme_changed(self._on_theme_changed)
 
         _app = QApplication.instance()
         if _app is not None:
@@ -900,9 +938,11 @@ class MainWindow(QMainWindow):
         m_file.addAction(act_clear_proxy)
         self._act_export = QAction(tr("menu.export"), self)
         self._act_export.triggered.connect(self._export_clips)
+        self._act_export.setEnabled(False)
         m_file.addAction(self._act_export)
         self._act_export_strong = QAction(tr("menu.export_strong"), self)
         self._act_export_strong.triggered.connect(self._export_clips_strong)
+        self._act_export_strong.setEnabled(False)
         m_file.addAction(self._act_export_strong)
         m_file.addSeparator()
         act_quit = QAction(tr("menu.quit"), self)
@@ -1103,7 +1143,7 @@ class MainWindow(QMainWindow):
         pix.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pix)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(QColor("#E6E6E6"))
+        painter.setPen(QColor(widget_colors().text_icon_color))
         font = QFont(self.font())
         font.setBold(True)
         font.setPixelSize(12 if len(text) == 1 else 10)
@@ -1158,6 +1198,27 @@ class MainWindow(QMainWindow):
         ):
             b.setText("")
             b.setIconSize(QSize(max(16, int(b.width() * 0.58)), max(16, int(b.height() * 0.58))))
+
+    def _on_theme_changed(self, wc: WidgetColors) -> None:
+        """Reapply all inline stylesheets and icons when the theme changes."""
+        self._preview_label.setStyleSheet(wc.preview_label_ss)
+        self._thumb_duration_label.setStyleSheet(wc.thumb_duration_ss)
+        self._source_path_label.setStyleSheet(wc.source_path_ss)
+        self._preview_wave_split.setStyleSheet(wc.splitter_ss)
+        self._refresh_thumb_selection_style()
+        self._apply_transport_button_icons()
+        # Re-style delete buttons in clip list
+        del_tip = tr("clips.delete")
+        for i in range(self._clip_list.count()):
+            item = self._clip_list.item(i)
+            w = self._clip_list.itemWidget(item)
+            if w is not None:
+                for child in w.findChildren(QPushButton):
+                    if child.toolTip() == del_tip:
+                        child.setStyleSheet(wc.clip_del_btn_ss)
+        # Refresh custom painted widgets
+        self._timeline.update()
+        self._wave.update()
 
     def _refresh_transport_tooltips(self) -> None:
         z = self._settings.playback_seek_seconds()
@@ -1451,6 +1512,36 @@ class MainWindow(QMainWindow):
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
         if not hasattr(self, "_drop_targets"):
             return super().eventFilter(watched, event)
+        # ---- pinch-to-zoom: handle NativeGesture events on timeline / waveform ----
+        if event.type() == QEvent.Type.NativeGesture:
+            from PySide6.QtGui import QNativeGestureEvent as _NGE
+            _nge = event  # type: ignore[assignment]
+            if isinstance(_nge, _NGE) and self._data.source_path:
+                gt = _nge.gestureType()
+                if watched not in (self._timeline, self._wave):
+                    return super().eventFilter(watched, event)
+                if gt == Qt.NativeGestureType.BeginNativeGesture:
+                    self._pinch_accumulator = 0.0
+                    self._pinch_anchor_frame = self._zoom_anchor_from_cursor_or_playhead()
+                    event.accept()
+                    return True
+                if gt == Qt.NativeGestureType.ZoomNativeGesture:
+                    self._pinch_accumulator += _nge.value()
+                    threshold = 0.04
+                    while abs(self._pinch_accumulator) >= threshold:
+                        zoom_in = self._pinch_accumulator > 0
+                        self._zoom_timeline(zoom_in=zoom_in, anchor_frame=self._pinch_anchor_frame)
+                        self._pinch_accumulator -= threshold if zoom_in else -threshold
+                    event.accept()
+                    return True
+                if gt == Qt.NativeGestureType.EndNativeGesture:
+                    if abs(self._pinch_accumulator) >= 0.02:
+                        zoom_in = self._pinch_accumulator > 0
+                        self._zoom_timeline(zoom_in=zoom_in, anchor_frame=self._pinch_anchor_frame)
+                    self._pinch_accumulator = 0.0
+                    event.accept()
+                    return True
+        # ---- end pinch-to-zoom ----
         if isinstance(event, QKeyEvent):
             if event.type() in (QEvent.Type.KeyPress, QEvent.Type.ShortcutOverride):
                 focus = QApplication.focusWidget()
@@ -1484,6 +1575,15 @@ class MainWindow(QMainWindow):
                     self._pan_timeline_from_wheel(event)
                     event.accept()
                     return True
+                if (
+                    not mods
+                    and self._view_span < self._tb.total_frames
+                ):
+                    dx = event.angleDelta().x()
+                    if dx != 0:
+                        self._pan_timeline_from_trackpad_swipe(event, watched)
+                        event.accept()
+                return True
             if isinstance(event, QDragEnterEvent):
                 if self._first_video_path_from_mime(event.mimeData()) is not None:
                     event.acceptProposedAction()
@@ -1562,10 +1662,12 @@ class MainWindow(QMainWindow):
             self._status(tr("status.analyzing_keyframes"))
 
     def _about(self) -> None:
+        from easyclip import __version__
+
         QMessageBox.about(
             self,
             tr("menu.about"),
-            "EasyClip\nMIT License — see LICENSE\nFFmpeg is not part of MIT; bundle LGPL builds and notices.",
+            tr("dialog.about_text", version=__version__),
         )
 
     def _show_filename_template_help(self, parent: QWidget | None = None) -> None:
@@ -1752,6 +1854,7 @@ class MainWindow(QMainWindow):
         return preset_id
 
     def _show_settings(self) -> None:
+        self._player.pause()
         dlg = QDialog(self)
         dlg.setWindowTitle(tr("settings.title"))
         lay = QVBoxLayout(dlg)
@@ -1766,7 +1869,18 @@ class MainWindow(QMainWindow):
         lang.addItem(tr("settings.lang.en_US"), "en_US")
         idx = lang.findData(self._settings.language())
         lang.setCurrentIndex(idx if idx >= 0 else 0)
+        _fit_combo_width(lang)
         general_form.addRow(tr("settings.lang"), lang)
+
+        theme_combo = QComboBox(tab_general)
+        theme_combo.addItem(tr("settings.theme.system"), Theme.SYSTEM)
+        theme_combo.addItem(tr("settings.theme.light"), Theme.LIGHT)
+        theme_combo.addItem(tr("settings.theme.dark"), Theme.DARK)
+        theme_idx = theme_combo.findData(self._settings.theme())
+        theme_combo.setCurrentIndex(theme_idx if theme_idx >= 0 else 0)
+        _fit_combo_width(theme_combo)
+        general_form.addRow(tr("settings.theme"), theme_combo)
+
         mode = QComboBox(tab_general)
         mode.addItem(tr("settings.mode.home"), ProjectDirMode.HOME_DEFAULT)
         mode.addItem(tr("settings.mode.source"), ProjectDirMode.NEXT_TO_SOURCE)
@@ -1777,6 +1891,7 @@ class MainWindow(QMainWindow):
             if mode.itemData(i) == cur:
                 mode.setCurrentIndex(i)
                 break
+        _fit_combo_width(mode)
         general_form.addRow(tr("settings.project_dir"), mode)
         sb_seek_step = QSpinBox(tab_general)
         sb_seek_step.setRange(1, 600)
@@ -1795,6 +1910,7 @@ class MainWindow(QMainWindow):
             if startup_behavior.itemData(i) == cur_behavior:
                 startup_behavior.setCurrentIndex(i)
                 break
+        _fit_combo_width(startup_behavior)
         general_form.addRow(tr("settings.startup_behavior"), startup_behavior)
         sb_undo_steps = QSpinBox(tab_general)
         sb_undo_steps.setRange(10, 500)
@@ -1838,7 +1954,12 @@ class MainWindow(QMainWindow):
             y = sb_ui_align_y.value()
             current = tr("settings.ui_align_current_pattern").format(x=x, y=y)
             lines = tr("settings.ui_align_block_hint").split("\n", 1)
-            lines[0] = lines[0] + current
+            if "。" in lines[0]:
+                lines[0] = lines[0].replace("。", f"【{current}】。")
+            elif lines[0].endswith("."):
+                lines[0] = lines[0][:-1] + f" [{current}]."
+            else:
+                lines[0] = lines[0] + " " + current
             lb_ui_align_hint.setText("\n".join(lines))
 
         warn_align = QCheckBox(tr("settings.warn_align_8n1"), gb_ui_align)
@@ -1969,7 +2090,7 @@ class MainWindow(QMainWindow):
         row_multiple_lay.addWidget(sb_multiple)
         row_multiple_lay.addWidget(QLabel(tr("export.options.multiple_suffix"), row_multiple))
         row_multiple_lay.addStretch(1)
-        export_form.addRow(row_multiple)
+        export_form.addRow("", row_multiple)
 
         row_p_align = QWidget(tab_export)
         row_p_align_lay = QHBoxLayout(row_p_align)
@@ -1986,10 +2107,12 @@ class MainWindow(QMainWindow):
         cb_p_align_round = QComboBox(row_p_align)
         cb_p_align_round.addItem(tr("export.options.align_round.ceil"), "ceil")
         cb_p_align_round.addItem(tr("export.options.align_round.floor"), "floor")
+        _fit_combo_width(cb_p_align_round)
         cb_p_align_apply = QComboBox(row_p_align)
         cb_p_align_apply.addItem(tr("export.options.align_apply.tail"), "tail")
         cb_p_align_apply.addItem(tr("export.options.align_apply.head"), "head")
         cb_p_align_apply.addItem(tr("export.options.align_apply.symmetric"), "symmetric")
+        _fit_combo_width(cb_p_align_apply)
         row_p_align_lay.addWidget(cb_p_align_enabled)
         row_p_align_lay.addWidget(QLabel(tr("export.options.align_x"), row_p_align))
         row_p_align_lay.addWidget(sb_p_align_x)
@@ -2016,6 +2139,7 @@ class MainWindow(QMainWindow):
         row_name_tpl_lay.setSpacing(8)
         edit_filename_template = QLineEdit(row_name_tpl)
         edit_filename_template.setPlaceholderText(tr("export.filename_template.placeholder"))
+        edit_filename_template.setMinimumWidth(260)
         btn_name_tpl_help = QToolButton(row_name_tpl)
         btn_name_tpl_help.setText("ℹ")
         btn_name_tpl_help.setToolTip(tr("export.filename_template.help.tip"))
@@ -2048,8 +2172,9 @@ class MainWindow(QMainWindow):
             auto_resolved = resolve_video_codec(ffmpeg_bin, "auto")
         except Exception:
             auto_resolved = "auto"
+        auto_display = _encoder_display_name(auto_resolved)
         encoder_options: list[tuple[str, str]] = [
-            ("auto", tr("export.options.encoder.auto", resolved=auto_resolved))
+            ("auto", tr("export.options.encoder.auto", resolved=auto_display))
         ]
         for key, label_key in (
             ("libx264", "export.options.encoder.libx264"),
@@ -2062,12 +2187,12 @@ class MainWindow(QMainWindow):
             ("h264_qsv", "export.options.encoder.h264_qsv"),
             ("hevc_qsv", "export.options.encoder.hevc_qsv"),
         ):
-            name = tr(label_key)
             if key not in available_encoders:
-                name = f"{name} {tr('export.options.encoder.unavailable_tag')}"
-            encoder_options.append((key, name))
+                continue
+            encoder_options.append((key, tr(label_key)))
         for k, n in encoder_options:
             cb_codec.addItem(n, k)
+        _fit_combo_width(cb_codec)
 
         sync_ui = [False]
 
@@ -2256,6 +2381,7 @@ class MainWindow(QMainWindow):
             if idx < 0:
                 idx = 1 if cb_preset.count() > 1 else 0
             cb_preset.setCurrentIndex(idx)
+            _fit_combo_width(cb_preset)
             cb_preset.blockSignals(False)
             _on_preset_changed()
 
@@ -2381,6 +2507,8 @@ class MainWindow(QMainWindow):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         self._settings.set_language(lang.currentData())
+        self._settings.set_theme(theme_combo.currentData())
+        set_theme(self._settings.theme())
         self._settings.set_project_dir_mode(mode.currentData())
         for i, (sb_before, sb_after) in enumerate(self._qs_spins, start=1):
             self._settings.set_quick_slice_extend(i, sb_before.value(), sb_after.value())
@@ -2968,10 +3096,7 @@ class MainWindow(QMainWindow):
             btn_del.setToolTip(tr("clips.delete"))
             btn_del.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_del.setFixedWidth(26)
-            btn_del.setStyleSheet(
-                "QPushButton { color:#e44; border:1px solid #944; border-radius:4px; background:#2b1a1a; } "
-                "QPushButton:hover { background:#3a2020; }"
-            )
+            btn_del.setStyleSheet(widget_colors().clip_del_btn_ss)
             btn_del.clicked.connect(lambda _checked=False, r=i: self._delete_clip_row(r))
             row_lay.addWidget(btn_del)
 
@@ -2984,6 +3109,18 @@ class MainWindow(QMainWindow):
         self._refresh_selected_clip_duration_label()
         self._refresh_clip_nudge_controls()
         self._refresh_clip_loop_controls()
+        self._refresh_export_buttons()
+
+    def _refresh_export_buttons(self) -> None:
+        has_closed = any(
+            c.state == ClipState.CLOSED.value and c.end_frame is not None
+            for c in self._data.clips
+        )
+        self._btn_export_sidebar.setEnabled(has_closed)
+        if self._act_export is not None:
+            self._act_export.setEnabled(has_closed)
+        if self._act_export_strong is not None:
+            self._act_export_strong.setEnabled(has_closed)
 
     def _update_clip_list_row_label(self, row: int) -> None:
         """Update only the text label and tooltip of one row without rebuilding the list."""
@@ -3347,8 +3484,9 @@ class MainWindow(QMainWindow):
         self._refresh_thumb_selection_style()
 
     def _refresh_thumb_selection_style(self) -> None:
-        base = "border:1px solid #555;background:#222;"
-        active = "border:2px solid #4da3ff;background:#222;"
+        wc = widget_colors()
+        base = wc.thumb_base_ss
+        active = wc.thumb_active_ss
         self._thumb_start.setStyleSheet(active if self._thumb_repeat_target == "start" else base)
         self._thumb_end.setStyleSheet(active if self._thumb_repeat_target == "end" else base)
         self._refresh_boundary_nudge_controls()
@@ -3708,6 +3846,27 @@ class MainWindow(QMainWindow):
 
     def _pan_timeline_from_wheel(self, event: QWheelEvent) -> None:
         self._pan_timeline(move_left=event.angleDelta().y() > 0)
+
+    def _pan_timeline_from_trackpad_swipe(self, event: QWheelEvent, watched: QObject) -> None:
+        """Pan the timeline view in response to a trackpad two-finger horizontal swipe.
+
+        Uses ``pixelDelta`` (when available) for smooth proportional motion,
+        falling back to ``angleDelta``. The delta is negated so the view pans
+        in the natural-scrolling direction: swiping left moves the view left
+        (earlier frames), content follows fingers.
+        """
+        t = max(1, self._tb.total_frames)
+        dx = event.pixelDelta().x()
+        if dx == 0:
+            dx = event.angleDelta().x()
+        w = max(1, watched.width())
+        span = max(1, self._view_span)
+        delta_f = dx / w * span
+        if abs(delta_f) < 1.0:
+            delta_f = 1.0 if dx > 0 else -1.0
+        # Negate: natural scrolling — swipe left = view left (earlier frames).
+        self._view_start = max(0, min(t - self._view_span, self._view_start - int(delta_f)))
+        self._update_timeline()
 
     def _pan_timeline(self, *, move_left: bool) -> None:
         t = max(1, self._tb.total_frames)
@@ -4393,8 +4552,9 @@ class MainWindow(QMainWindow):
             auto_resolved = resolve_video_codec(ffmpeg_bin, "auto")
         except Exception:
             auto_resolved = "auto"
+        auto_display = _encoder_display_name(auto_resolved)
         encoder_options: list[tuple[str, str]] = [
-            ("auto", tr("export.options.encoder.auto", resolved=auto_resolved))
+            ("auto", tr("export.options.encoder.auto", resolved=auto_display))
         ]
         for key, label_key in (
             ("libx264", "export.options.encoder.libx264"),
@@ -4407,11 +4567,9 @@ class MainWindow(QMainWindow):
             ("h264_qsv", "export.options.encoder.h264_qsv"),
             ("hevc_qsv", "export.options.encoder.hevc_qsv"),
         ):
-            tag = tr("export.options.encoder.unavailable_tag")
-            name = tr(label_key)
             if key not in available_encoders:
-                name = f"{name} {tag}"
-            encoder_options.append((key, name))
+                continue
+            encoder_options.append((key, tr(label_key)))
 
         dlg = QDialog(self)
         dlg.setWindowTitle(tr("export.options.title"))
@@ -4433,6 +4591,7 @@ class MainWindow(QMainWindow):
             idx_quick = cb_quick_preset.findData(default_preset_id)
             if idx_quick >= 0:
                 cb_quick_preset.setCurrentIndex(idx_quick)
+        _fit_combo_width(cb_quick_preset)
         row_quick_preset_lay.addWidget(cb_quick_preset, stretch=1)
         row_quick_preset_lay.addStretch(1)
         form.addRow(tr("export.options.quick_preset"), row_quick_preset)
@@ -4447,6 +4606,7 @@ class MainWindow(QMainWindow):
         codec_idx = cb_codec.findData(preset_codec)
         if codec_idx >= 0:
             cb_codec.setCurrentIndex(codec_idx)
+        _fit_combo_width(cb_codec)
         row_codec_lay.addWidget(cb_codec, stretch=1)
         row_codec_lay.addStretch(1)
         form.addRow(tr("export.options.encoder"), row_codec)
@@ -4521,12 +4681,14 @@ class MainWindow(QMainWindow):
         cb_export_align_round.addItem(tr("export.options.align_round.ceil"), "ceil")
         cb_export_align_round.addItem(tr("export.options.align_round.floor"), "floor")
         cb_export_align_round.setCurrentIndex(0 if ar0 == "ceil" else 1)
+        _fit_combo_width(cb_export_align_round)
         cb_export_align_apply = QComboBox(dlg)
         cb_export_align_apply.addItem(tr("export.options.align_apply.tail"), "tail")
         cb_export_align_apply.addItem(tr("export.options.align_apply.head"), "head")
         cb_export_align_apply.addItem(tr("export.options.align_apply.symmetric"), "symmetric")
         iax = cb_export_align_apply.findData(aa0)
         cb_export_align_apply.setCurrentIndex(iax if iax >= 0 else 0)
+        _fit_combo_width(cb_export_align_apply)
         rel.addWidget(cb_export_align_enabled)
         rel.addWidget(QLabel(tr("export.options.align_x"), dlg))
         rel.addWidget(sb_export_align_x)
@@ -4621,7 +4783,7 @@ class MainWindow(QMainWindow):
         lb_multiple_info.setToolTip(tr("export.options.multiple_tip"))
         row_multiple_lay.addWidget(lb_multiple_info)
         row_multiple_lay.addStretch(1)
-        form.addRow(row_multiple)
+        form.addRow("", row_multiple)
         lay.addLayout(form)
 
         gb_balance = QGroupBox(tr("export.options.edge_adjust.title"), dlg)
@@ -4698,14 +4860,14 @@ class MainWindow(QMainWindow):
         edit_filename_template = QLineEdit(dlg)
         edit_filename_template.setPlaceholderText(tr("export.filename_template.placeholder"))
         edit_filename_template.setText(preset_filename_template)
+        edit_filename_template.setMinimumWidth(260)
         btn_name_tpl_help = QToolButton(dlg)
         btn_name_tpl_help.setText("ℹ")
         btn_name_tpl_help.setToolTip(tr("export.filename_template.help.tip"))
         btn_name_tpl_help.clicked.connect(lambda: self._show_filename_template_help(dlg))
         row_name_tpl_lay.addWidget(edit_filename_template, stretch=1)
         row_name_tpl_lay.addWidget(btn_name_tpl_help)
-        lay.addWidget(QLabel(tr("export.filename_template.label"), dlg))
-        lay.addWidget(row_name_tpl)
+        form.addRow(tr("export.filename_template.label"), row_name_tpl)
 
         lay.addSpacing(8)
         lb_preview = QLabel("", dlg)
@@ -4779,7 +4941,6 @@ class MainWindow(QMainWindow):
         syncing_dim = [False]
         syncing_edges = [False]
         command_only = [""]
-        fallback_note = [""]
 
         def _resolved_codec() -> str:
             requested = str(cb_codec.currentData() or "auto").strip().lower()
@@ -5026,19 +5187,10 @@ class MainWindow(QMainWindow):
             vf_chain, content_w, content_h, fw, fh = _build_vf_chain(fps_value)
             codec_req = str(cb_codec.currentData() or "auto").strip().lower()
             codec_resolved = _resolved_codec()
-            codec_label = cb_codec.currentText()
-            fallback_note[0] = ""
-            if codec_req != codec_resolved:
-                fallback_note[0] = tr(
-                    "export.options.codec_fallback_note",
-                    requested=codec_req,
-                    resolved=codec_resolved,
-                )
-                codec_label = tr(
-                    "export.options.codec_display_resolved",
-                    requested=codec_label,
-                    resolved=codec_resolved,
-                )
+            if codec_req == "auto":
+                codec_label = tr("export.options.encoder.auto", resolved=codec_resolved)
+            else:
+                codec_label = codec_resolved
             rate_mode = "quality" if rb_quality.isChecked() else "bitrate"
             qname = _quality_symbol_for_codec(codec_resolved)
             preview_key = (
@@ -5108,7 +5260,7 @@ class MainWindow(QMainWindow):
             if strong_av_sync:
                 cmd_parts.extend(["-fps_mode", "cfr"])
             cmd_parts.append('"<output.mp4>"')
-            command_only[0] = ("# " + fallback_note[0] + "\n" if fallback_note[0] else "") + " ".join(cmd_parts)
+            command_only[0] = " ".join(cmd_parts)
             te_cmd.setPlainText(command_only[0])
             btn_copy_cmd.setToolTip(tr("export.options.copy"))
 
@@ -5374,6 +5526,7 @@ class MainWindow(QMainWindow):
         if self._export_thread and self._export_thread.isRunning():
             QMessageBox.information(self, export_title, tr("export.busy"))
             return
+        self._player.pause()
         opts = self._show_export_task_options(strong_av_sync=strong_av_sync)
         if opts is None:
             return
@@ -5540,12 +5693,13 @@ class MainWindow(QMainWindow):
         dlg = self._export_progress
         if dlg is None:
             return
-        if current == self._export_ui_last_current:
-            frame = max(frame, self._export_ui_last_frame)
-        else:
-            self._export_ui_last_current = current
-            self._export_ui_last_frame = 0
-        self._export_ui_last_frame = frame
+        if frame >= 0:
+            if current == self._export_ui_last_current:
+                frame = max(frame, self._export_ui_last_frame)
+            else:
+                self._export_ui_last_current = current
+                self._export_ui_last_frame = 0
+            self._export_ui_last_frame = frame
         overall = max(overall, self._export_ui_last_overall)
         self._export_ui_last_overall = overall
         if frame < 0:
@@ -5597,7 +5751,27 @@ class MainWindow(QMainWindow):
     def _on_export_failed(self, err: str) -> None:
         export_debug_log("ui.export.failed", error=err)
         self._finish_export_ui()
-        QMessageBox.critical(self, tr("export.failed"), err)
+        dlg = QDialog(self)
+        dlg.setWindowTitle(tr("export.failed"))
+        dlg.resize(560, 320)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(tr("export.failed_detail"), dlg))
+        te = QPlainTextEdit(dlg)
+        te.setReadOnly(True)
+        te.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        te.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        te.setPlainText(err)
+        lay.addWidget(te, stretch=1)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_copy = QPushButton(tr("export.copy_error"), dlg)
+        btn_copy.clicked.connect(lambda: QApplication.clipboard().setText(err))
+        btn_row.addWidget(btn_copy)
+        btn_ok = QPushButton(tr("dialog.ok"), dlg)
+        btn_ok.clicked.connect(dlg.accept)
+        btn_row.addWidget(btn_ok)
+        lay.addLayout(btn_row)
+        dlg.exec()
 
     @Slot()
     def _on_export_cancelled(self) -> None:

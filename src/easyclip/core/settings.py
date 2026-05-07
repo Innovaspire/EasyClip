@@ -9,6 +9,7 @@ from typing import Any
 
 from PySide6.QtCore import QSettings
 
+from easyclip.core.theme import Theme
 from easyclip.i18n.strings import tr
 
 
@@ -38,6 +39,22 @@ class AppSettings:
 
     def set_language(self, code: str) -> None:
         self._s.setValue("language", code)
+
+    def theme(self) -> Theme:
+        v = str(self._s.value("theme", Theme.SYSTEM.value))
+        try:
+            return Theme(v)
+        except ValueError:
+            return Theme.SYSTEM
+
+    def set_theme(self, theme: Theme | str) -> None:
+        if isinstance(theme, Theme):
+            self._s.setValue("theme", theme.value)
+        else:
+            try:
+                self._s.setValue("theme", Theme(str(theme)).value)
+            except ValueError:
+                self._s.setValue("theme", Theme.SYSTEM.value)
 
     def project_dir_mode(self) -> ProjectDirMode:
         v = str(self._s.value("project_dir_mode", ProjectDirMode.HOME_DEFAULT))

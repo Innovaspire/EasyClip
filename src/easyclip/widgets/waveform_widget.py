@@ -31,6 +31,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
+from easyclip.core.theme import WidgetColors, on_theme_changed, widget_colors
+
 
 class WaveformUiState(Enum):
     EMPTY = auto()
@@ -47,6 +49,7 @@ class WaveformWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMouseTracking(True)
+        self._wc = widget_colors()
         self._sync_crosshair_frame: int | None = None
         self._mins: np.ndarray | None = None
         self._maxs: np.ndarray | None = None
@@ -68,10 +71,16 @@ class WaveformWidget(QWidget):
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.MinimumExpanding,
         )
+        on_theme_changed(self._on_theme_changed)
 
     def _invalidate_wave_cache(self) -> None:
         self._wave_cache = None
         self._wave_cache_dirty = True
+
+    def _on_theme_changed(self, wc: WidgetColors) -> None:
+        self._wc = wc
+        self._invalidate_wave_cache()
+        self.update()
 
     def set_status_texts(self, loading: str, no_audio: str, empty: str = "—") -> None:
         """Call once with tr() strings from parent."""
@@ -269,7 +278,7 @@ class WaveformWidget(QWidget):
             return
 
         cache = QPixmap(w, h)
-        cache.fill(QColor(28, 28, 32))
+        cache.fill(self._wc.waveform_bg)
         p = QPainter(cache)
         p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         try:
@@ -346,30 +355,30 @@ class WaveformWidget(QWidget):
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(28, 28, 32))
+        painter.fillRect(self.rect(), self._wc.waveform_bg)
         w = max(1, self.width())
         h = self.height()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         try:
             if self._state == WaveformUiState.LOADING:
-                painter.setPen(QPen(QColor(180, 160, 90)))
+                painter.setPen(QPen(self._wc.waveform_loading))
                 painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._loading_text)
                 return
             if self._state == WaveformUiState.NO_AUDIO:
-                painter.setPen(QPen(QColor(120, 120, 120)))
+                painter.setPen(QPen(self._wc.waveform_empty))
                 painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._no_audio_text)
                 return
             if self._state == WaveformUiState.ERROR:
-                painter.setPen(QPen(QColor(200, 100, 100)))
+                painter.setPen(QPen(self._wc.waveform_error))
                 painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._error_text or "—")
                 return
             if self._state == WaveformUiState.EMPTY or self._mins is None or self._maxs is None:
-                painter.setPen(QPen(QColor(120, 120, 120)))
+                painter.setPen(QPen(self._wc.waveform_empty))
                 painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._empty_text)
                 return
 
             if len(self._mins) == 0:
-                painter.setPen(QPen(QColor(120, 120, 120)))
+                painter.setPen(QPen(self._wc.waveform_empty))
                 painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._empty_text)
                 return
 
@@ -385,10 +394,10 @@ class WaveformWidget(QWidget):
         finally:
             px = self._x_for_frame(self._current_frame)
             if 0 <= px < w:
-                painter.setPen(QPen(QColor(255, 220, 80), 2))
+                painter.setPen(QPen(self._wc.playhead_color, 2))
                 painter.drawLine(px, 0, px, h)
             if self._sync_crosshair_frame is not None:
                 hx = self._x_for_frame(self._sync_crosshair_frame)
                 if 0 <= hx < w:
-                    painter.setPen(QPen(QColor(255, 255, 255), 1))
+                    painter.setPen(QPen(self._wc.crosshair_color, 1))
                     painter.drawLine(hx, 0, hx, h)

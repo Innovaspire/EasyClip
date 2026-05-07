@@ -15,7 +15,8 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     "menu.generate_proxy": {"zh_CN": "生成预览代理…", "en_US": "Generate preview proxy…"},
     "menu.clear_proxy": {"zh_CN": "清除预览代理…", "en_US": "Clear preview proxies…"},
-    "menu.settings": {"zh_CN": "设置…", "en_US": "Settings…"},
+    "menu.settings": {"zh_CN": "设置", "en_US": "Settings"},
+    "menu.preferences": {"zh_CN": "偏好设置…", "en_US": "Preferences…"},
     "menu.quit": {"zh_CN": "退出", "en_US": "Quit"},
     "menu.help": {"zh_CN": "帮助", "en_US": "Help"},
     "menu.about": {"zh_CN": "关于", "en_US": "About"},
@@ -395,6 +396,38 @@ MESSAGES: dict[str, dict[str, str]] = {
     "settings.clear_proxies.no_root": {
         "zh_CN": "当前模式下没有可扫描的项目目录。",
         "en_US": "No project root is available for this mode.",
+    },
+    "settings.clear_home_cache": {
+        "zh_CN": "清理用户目录项目文件",
+        "en_US": "Clear Home Project Files",
+    },
+    "settings.clear_home_cache.confirm": {
+        "zh_CN": "将删除 {path} 目录下的所有项目数据。\n\n此操作不可撤销，是否继续？",
+        "en_US": "This will delete all project data under {path}.\n\nThis action cannot be undone. Continue?",
+    },
+    "settings.clear_home_cache.nothing": {
+        "zh_CN": "用户目录下没有 EasyClip 缓存数据。",
+        "en_US": "No EasyClip cache data found in your home directory.",
+    },
+    "settings.clear_home_cache.current_project_warn": {
+        "zh_CN": "⚠ 当前打开的项目位于此目录中，删除后将无法恢复。",
+        "en_US": "⚠ The currently open project is located in this directory and will be lost.",
+    },
+    "settings.clear_home_cache.progress": {
+        "zh_CN": "正在清理缓存...",
+        "en_US": "Clearing cache...",
+    },
+    "settings.clear_home_cache.error": {
+        "zh_CN": "清理过程中发生错误：{error}",
+        "en_US": "Error during cleanup: {error}",
+    },
+    "settings.clear_home_cache.done": {
+        "zh_CN": "已清理缓存，共删除 {count} 个文件/目录。",
+        "en_US": "Cache cleared: {count} files/directories deleted.",
+    },
+    "settings.clear_home_cache.failed": {
+        "zh_CN": "清理过程中出现错误，仅删除了 {count} 个项目，剩余内容可能被其他程序占用。",
+        "en_US": "Some items could not be deleted ({count} removed). Remaining items may be in use.",
     },
     "settings.clear_proxies.done": {
         "zh_CN": "已删除 {deleted} 个代理文件，失败 {failed} 个。",

@@ -7,7 +7,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QLocale, QSettings
 
 from easyclip.core.theme import Theme
 from easyclip.i18n.strings import tr
@@ -30,12 +30,20 @@ def default_projects_root() -> Path:
     return Path.home() / ".easyclip" / "projects"
 
 
+def detect_system_language() -> str:
+    """Return 'zh_CN' for Chinese systems, 'en_US' otherwise."""
+    name = QLocale.system().name()
+    if name.startswith("zh"):
+        return "zh_CN"
+    return "en_US"
+
+
 class AppSettings:
     def __init__(self) -> None:
         self._s = QSettings("Innovaspire", "EasyClip")
 
     def language(self) -> str:
-        return str(self._s.value("language", "zh_CN"))
+        return str(self._s.value("language", detect_system_language()))
 
     def set_language(self, code: str) -> None:
         self._s.setValue("language", code)
@@ -206,15 +214,15 @@ class AppSettings:
             "export_fps": 24,
             "inherit_fps": False,
             "export_video_codec": "auto",
-            "export_video_rate_mode": "bitrate",
+            "export_video_rate_mode": "quality",
             "export_video_bitrate_kbps": 8000,
             "bitrate_match_source": False,
-            "export_video_quality": 23,
+            "export_video_quality": 20,
             "export_filename_template": "{source_name}_{clip_index:03d}",
             "size_multiple_enabled": False,
-            "size_multiple_value": 2,
-            "align_enabled": True,
-            "align_x": 8,
+            "size_multiple_value": 32,
+            "align_enabled": False,
+            "align_x": 32,
             "align_y": 1,
             "align_round": "ceil",
             "align_apply": "tail",
@@ -302,15 +310,15 @@ class AppSettings:
                         "export_fps": self.export_fps(),
                         "inherit_fps": False,
                         "export_video_codec": "auto",
-                        "export_video_rate_mode": "bitrate",
+                        "export_video_rate_mode": "quality",
                         "export_video_bitrate_kbps": 8000,
                         "bitrate_match_source": False,
-                        "export_video_quality": 23,
+                        "export_video_quality": 20,
                         "export_filename_template": "{source_name}_{clip_index:03d}",
                         "size_multiple_enabled": False,
-                        "size_multiple_value": 2,
-                        "align_enabled": True,
-                        "align_x": 8,
+                        "size_multiple_value": 32,
+                        "align_enabled": False,
+                        "align_x": 32,
                         "align_y": 1,
                         "align_round": "ceil",
                         "align_apply": "tail",

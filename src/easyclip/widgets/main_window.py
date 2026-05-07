@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import bisect
+import os
 import sys
 import time
 import uuid
@@ -305,6 +306,90 @@ class ClipThumbThread(QThread):
                 self.failed.emit(self.request_id, self.row, self.clip_id, str(e))
 
 
+class ClearCacheThread(QThread):
+    done = Signal(int, int)
+    failed = Signal(str)
+
+    def __init__(self, target: Path) -> None:
+        super().__init__()
+        self.target = target
+
+    def run(self) -> None:
+        try:
+            self._run_impl()
+        except Exception as exc:
+            if not self.isInterruptionRequested():
+                print(f"[ClearCache] error: {exc}")
+                self.failed.emit(str(exc))
+
+    def _run_impl(self) -> None:
+        target_str = str(self.target)
+        print(f"[ClearCache] start: {target_str}")
+
+        # Collect every path under target, deepest first (files then dirs).
+        entries: list[Path] = []
+        for root, dirs, files in os.walk(self.target, topdown=True):
+            root_p = Path(root)
+            for name in files:
+                entries.append(root_p / name)
+            # Defer directories so they can be removed after their children.
+            for name in dirs:
+                entries.append(root_p / name)
+        entries.reverse()  # deepest first
+
+        print(f"[ClearCache] found {len(entries)} entries to remove")
+
+        deleted = 0
+        for p in entries:
+            if self.isInterruptionRequested():
+                break
+            if p.is_symlink():
+                try:
+                    p.unlink()
+                    deleted += 1
+                    print(f"[ClearCache] unlinked symlink: {p.name} ({deleted} total)")
+                except OSError as e:
+                    print(f"[ClearCache] unlink failed: {p.name} - {e}")
+                continue
+            if p.is_dir():
+                try:
+                    p.rmdir()
+                    deleted += 1
+                    print(f"[ClearCache] rmdir: {p.name} ({deleted} total)")
+                except OSError as e:
+                    print(f"[ClearCache] rmdir failed: {p.name} - {e}")
+            else:
+                try:
+                    p.unlink()
+                    deleted += 1
+                    print(f"[ClearCache] unlinked: {p.name} ({deleted} total)")
+                except OSError as e:
+                    print(f"[ClearCache] unlink failed: {p.name} - {e}")
+
+        # Try to remove the target itself.
+        try:
+            self.target.rmdir()
+            deleted += 1
+            print(f"[ClearCache] rmdir target: {self.target.name} ({deleted} total)")
+        except OSError as e:
+            print(f"[ClearCache] rmdir target failed: {self.target.name} - {e}")
+
+        # Remove empty parent .easyclip/ if possible.
+        parent_dir = self.target.parent
+        try:
+            next(parent_dir.iterdir())
+        except StopIteration:
+            try:
+                parent_dir.rmdir()
+                print(f"[ClearCache] removed empty parent: {parent_dir}")
+            except OSError as e:
+                print(f"[ClearCache] rmdir parent failed: {parent_dir} - {e}")
+
+        remaining = 1 if self.target.is_dir() else 0
+        print(f"[ClearCache] done: {deleted} deleted, {remaining} remaining")
+        self.done.emit(deleted, remaining)
+
+
 class _ExportUIBridge(QObject):
     """Cross-thread bridge: stderr drainer runs on a plain ``threading`` thread (not ``QThread``)."""
 
@@ -341,8 +426,8 @@ class ExportTaskOptions:
     export_video_quality: int
     export_filename_template: str
     video_filter: str
-    align_enabled: bool = True
-    align_x: int = 8
+    align_enabled: bool = False
+    align_x: int = 32
     align_y: int = 1
     align_round: str = "ceil"
     align_apply: str = "tail"
@@ -521,6 +606,7 @@ class MainWindow(QMainWindow):
         self._wave_thread: WaveformThread | None = None
         self._keyframe_thread: KeyframeThread | None = None
         self._thumb_thread: ClipThumbThread | None = None
+        self._clear_cache_thread: ClearCacheThread | None = None
         self._export_thread: QThread | None = None
         self._export_worker: ExportWorker | None = None
         self._export_progress: QProgressDialog | None = None
@@ -963,7 +1049,8 @@ class MainWindow(QMainWindow):
         m_edit.addAction(self._act_redo)
 
         m_settings = self.menuBar().addMenu(tr("menu.settings"))
-        act_set = QAction(tr("menu.settings"), self)
+        act_set = QAction(tr("menu.preferences"), self)
+        act_set.setMenuRole(QAction.MenuRole.NoRole)
         act_set.triggered.connect(self._show_settings)
         m_settings.addAction(act_set)
 
@@ -1080,6 +1167,7 @@ class MainWindow(QMainWindow):
             self._keyframe_thread,
             self._thumb_thread,
             self._export_thread,
+            self._clear_cache_thread,
         ):
             if t and t.isRunning():
                 t.requestInterruption()
@@ -1089,11 +1177,13 @@ class MainWindow(QMainWindow):
             self._keyframe_thread,
             self._thumb_thread,
             self._export_thread,
+            self._clear_cache_thread,
         ):
             if t and t.isRunning():
                 if not t.wait(10_000):
                     t.terminate()
                     t.wait(3000)
+        self._clear_cache_thread = None
         self._export_thread = None
         self._export_worker = None
         event.accept()
@@ -1794,9 +1884,9 @@ class MainWindow(QMainWindow):
         export_video_quality: int,
         export_filename_template: str = DEFAULT_EXPORT_FILENAME_TEMPLATE,
         size_multiple_enabled: bool = False,
-        size_multiple_value: int = 2,
-        align_enabled: bool = True,
-        align_x: int = 8,
+        size_multiple_value: int = 32,
+        align_enabled: bool = False,
+        align_x: int = 32,
         align_y: int = 1,
         align_round: str = "ceil",
         align_apply: str = "tail",
@@ -1892,7 +1982,18 @@ class MainWindow(QMainWindow):
                 mode.setCurrentIndex(i)
                 break
         _fit_combo_width(mode)
-        general_form.addRow(tr("settings.project_dir"), mode)
+
+        btn_clear_home = QPushButton(tr("settings.clear_home_cache"), tab_general)
+        btn_clear_home.clicked.connect(
+            lambda: self._clear_home_cache(dlg, btn_clear_home)
+        )
+        dir_row = QHBoxLayout()
+        dir_row.addWidget(mode)
+        dir_row.addWidget(btn_clear_home)
+        dir_row.setContentsMargins(0, 0, 0, 0)
+        dir_container = QWidget(tab_general)
+        dir_container.setLayout(dir_row)
+        general_form.addRow(tr("settings.project_dir"), dir_container)
         sb_seek_step = QSpinBox(tab_general)
         sb_seek_step.setRange(1, 600)
         sb_seek_step.setSuffix(tr("settings.playback_seek_seconds_suffix"))
@@ -2278,7 +2379,7 @@ class MainWindow(QMainWindow):
             )
 
         def _preset_state_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
-            ax = max(1, min(1024, int(payload.get("align_x", 8))))
+            ax = max(1, min(1024, int(payload.get("align_x", 32))))
             ay = int(payload.get("align_y", 1)) % ax
             ar = str(payload.get("align_round", "ceil") or "ceil")
             if ar not in {"ceil", "floor"}:
@@ -2293,19 +2394,19 @@ class MainWindow(QMainWindow):
                 "export_video_codec": str(payload.get("export_video_codec", "auto") or "auto").strip().lower() or "auto",
                 "export_video_rate_mode": (
                     "quality"
-                    if str(payload.get("export_video_rate_mode", "bitrate")).strip().lower() == "quality"
+                    if str(payload.get("export_video_rate_mode", "quality")).strip().lower() == "quality"
                     else "bitrate"
                 ),
                 "export_video_bitrate_kbps": max(300, min(200000, int(payload.get("export_video_bitrate_kbps", 8000)))),
                 "bitrate_match_source": bool(payload.get("bitrate_match_source", False)),
-                "export_video_quality": max(0, min(51, int(payload.get("export_video_quality", 23)))),
+                "export_video_quality": max(0, min(51, int(payload.get("export_video_quality", 20)))),
                 "export_filename_template": (
                     str(payload.get("export_filename_template", DEFAULT_EXPORT_FILENAME_TEMPLATE) or "").strip()
                     or DEFAULT_EXPORT_FILENAME_TEMPLATE
                 ),
                 "size_multiple_enabled": bool(payload.get("size_multiple_enabled", False)),
-                "size_multiple_value": max(1, min(4096, int(payload.get("size_multiple_value", 2)))),
-                "align_enabled": bool(payload.get("align_enabled", True)),
+                "size_multiple_value": max(1, min(4096, int(payload.get("size_multiple_value", 32)))),
+                "align_enabled": bool(payload.get("align_enabled", False)),
                 "align_x": ax,
                 "align_y": ay,
                 "align_round": ar,
@@ -2318,13 +2419,13 @@ class MainWindow(QMainWindow):
                 export_fps=self._settings.export_fps(),
                 inherit_fps=False,
                 export_video_codec="auto",
-                export_video_rate_mode="bitrate",
+                export_video_rate_mode="quality",
                 export_video_bitrate_kbps=8000,
                 bitrate_match_source=False,
-                export_video_quality=23,
+                export_video_quality=20,
                 export_filename_template=DEFAULT_EXPORT_FILENAME_TEMPLATE,
                 size_multiple_enabled=False,
-                size_multiple_value=2,
+                size_multiple_value=32,
                 preset_id=None,
             )
             st = _preset_state_from_payload(template)
@@ -2396,13 +2497,13 @@ class MainWindow(QMainWindow):
                     export_fps=self._settings.export_fps(),
                     inherit_fps=False,
                     export_video_codec="auto",
-                    export_video_rate_mode="bitrate",
+                    export_video_rate_mode="quality",
                     export_video_bitrate_kbps=8000,
                     bitrate_match_source=False,
-                    export_video_quality=23,
+                    export_video_quality=20,
                     export_filename_template=DEFAULT_EXPORT_FILENAME_TEMPLATE,
                     size_multiple_enabled=False,
-                    size_multiple_value=2,
+                    size_multiple_value=32,
                     preset_id=None,
                 )
                 _apply_preset_to_form(tmpl, is_new=True)
@@ -2594,6 +2695,76 @@ class MainWindow(QMainWindow):
             tr("settings.clear_proxies.title"),
             tr("settings.clear_proxies.done", deleted=deleted, failed=failed),
         )
+
+    def _clear_home_cache(self, parent: QWidget, button: QPushButton) -> None:
+        target = default_projects_root()
+        if not target.is_dir():
+            QMessageBox.information(
+                parent,
+                tr("settings.clear_home_cache"),
+                tr("settings.clear_home_cache.nothing"),
+            )
+            return
+        confirm_msg = tr("settings.clear_home_cache.confirm", path=str(target))
+        if self._store is not None:
+            store_dir = str(self._store.project_dir.resolve())
+            target_dir = str(target.resolve())
+            if store_dir.startswith(target_dir + os.sep) or store_dir == target_dir:
+                confirm_msg += "\n\n" + tr("settings.clear_home_cache.current_project_warn")
+        ans = QMessageBox.question(
+            parent,
+            tr("settings.clear_home_cache"),
+            confirm_msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+
+        button.setEnabled(False)
+
+        progress = QProgressDialog(
+            tr("settings.clear_home_cache.progress"), "", 0, 0, parent
+        )
+        progress.setWindowTitle(tr("settings.clear_home_cache"))
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setCancelButton(None)
+        progress.setMinimumDuration(0)
+        progress.show()
+
+        thread = ClearCacheThread(target)
+        self._clear_cache_thread = thread
+
+        def _on_done(count: int, remaining: int) -> None:
+            progress.close()
+            button.setEnabled(True)
+            if remaining:
+                QMessageBox.information(
+                    self,
+                    tr("settings.clear_home_cache"),
+                    tr("settings.clear_home_cache.failed", count=count),
+                )
+            else:
+                QMessageBox.information(
+                    self,
+                    tr("settings.clear_home_cache"),
+                    tr("settings.clear_home_cache.done", count=count),
+                )
+
+        def _on_failed(error: str) -> None:
+            progress.close()
+            button.setEnabled(True)
+            QMessageBox.warning(
+                self,
+                tr("settings.clear_home_cache"),
+                tr("settings.clear_home_cache.error", error=error),
+            )
+
+        thread.done.connect(_on_done)
+        thread.failed.connect(_on_failed)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda: setattr(self, "_clear_cache_thread", None))
+        thread.start()
 
     def _refresh_min_window_size(self) -> None:
         # Ensure the top splitter cannot shrink below the right sidebar's required content height,
@@ -4518,22 +4689,22 @@ class MainWindow(QMainWindow):
         preset_fps = max(1, min(240, int(default_preset.get("export_fps", self._settings.export_fps()))))
         preset_inherit_fps = bool(default_preset.get("inherit_fps", False))
         preset_codec = str(default_preset.get("export_video_codec", "auto") or "auto").strip().lower()
-        preset_rate_mode = str(default_preset.get("export_video_rate_mode", "bitrate") or "bitrate").strip().lower()
+        preset_rate_mode = str(default_preset.get("export_video_rate_mode", "quality") or "quality").strip().lower()
         if preset_rate_mode not in {"bitrate", "quality"}:
-            preset_rate_mode = "bitrate"
+            preset_rate_mode = "quality"
         preset_bitrate = max(
             300,
             min(200000, int(default_preset.get("export_video_bitrate_kbps", source_bitrate_kbps))),
         )
         preset_bitrate_match_source = bool(default_preset.get("bitrate_match_source", False))
-        preset_quality = max(0, min(51, int(default_preset.get("export_video_quality", 23))))
+        preset_quality = max(0, min(51, int(default_preset.get("export_video_quality", 20))))
         preset_filename_template = (
             str(default_preset.get("export_filename_template", DEFAULT_EXPORT_FILENAME_TEMPLATE) or "").strip()
             or DEFAULT_EXPORT_FILENAME_TEMPLATE
         )
         preset_multiple_enabled = bool(default_preset.get("size_multiple_enabled", False))
-        preset_multiple_value = max(1, min(4096, int(default_preset.get("size_multiple_value", 2))))
-        ax0 = max(1, min(1024, int(default_preset.get("align_x", 8))))
+        preset_multiple_value = max(1, min(4096, int(default_preset.get("size_multiple_value", 32))))
+        ax0 = max(1, min(1024, int(default_preset.get("align_x", 32))))
         ay0 = int(default_preset.get("align_y", 1)) % ax0
         ar0 = str(default_preset.get("align_round", "ceil") or "ceil")
         if ar0 not in {"ceil", "floor"}:
@@ -4541,7 +4712,7 @@ class MainWindow(QMainWindow):
         aa0 = str(default_preset.get("align_apply", "tail") or "tail")
         if aa0 not in {"tail", "head", "symmetric"}:
             aa0 = "tail"
-        preset_align_enabled = bool(default_preset.get("align_enabled", True))
+        preset_align_enabled = bool(default_preset.get("align_enabled", False))
         try:
             ffmpeg_bin, _ = find_ffmpeg()
             available_encoders = list_video_encoders(ffmpeg_bin)
@@ -5069,8 +5240,8 @@ class MainWindow(QMainWindow):
                 or DEFAULT_EXPORT_FILENAME_TEMPLATE
             )
             cb_multiple.setChecked(bool(preset.get("size_multiple_enabled", False)))
-            sb_multiple.setValue(max(1, min(4096, int(preset.get("size_multiple_value", 2)))))
-            axp = max(1, min(1024, int(preset.get("align_x", 8))))
+            sb_multiple.setValue(max(1, min(4096, int(preset.get("size_multiple_value", 32)))))
+            axp = max(1, min(1024, int(preset.get("align_x", 32))))
             ayp = int(preset.get("align_y", 1)) % axp
             arp = str(preset.get("align_round", "ceil") or "ceil")
             if arp not in {"ceil", "floor"}:

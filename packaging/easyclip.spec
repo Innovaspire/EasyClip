@@ -14,11 +14,15 @@ APP_ICNS = ROOT / "packaging" / "app.icns"
 
 VERSION = os.environ.get("EASYCLIP_VERSION", "0.0.0").lstrip("v")
 
+# Write version file so the frozen app can read it at runtime (no .git, no git binary)
+_VERSION_TXT = ROOT / "packaging" / "_version.txt"
+_VERSION_TXT.write_text(VERSION, encoding="utf-8")
+
 a = Analysis(
     [str(ROOT / "main.py")],
     pathex=[str(SRC)],
     binaries=[],
-    datas=[],
+    datas=[(str(_VERSION_TXT), "easyclip")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

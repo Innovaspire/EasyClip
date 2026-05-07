@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -17,11 +18,20 @@ def _git_version() -> str:
             cwd=str(root),
         )
         if proc.returncode != 0:
-            return "0.0.0"
+            return _fallback_version()
         raw = proc.stdout.strip()
     except Exception:
-        return "0.0.0"
+        return _fallback_version()
     return _to_pep440(raw)
+
+
+def _fallback_version() -> str:
+    # Frozen app: version.txt is bundled alongside this module
+    if getattr(sys, "frozen", False):
+        bundled = Path(sys._MEIPASS) / "easyclip" / "_version.txt"
+        if bundled.is_file():
+            return bundled.read_text(encoding="utf-8").strip()
+    return "0.0.0"
 
 
 def _to_pep440(raw: str) -> str:

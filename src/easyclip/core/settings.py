@@ -221,6 +221,9 @@ class AppSettings:
             "export_filename_template": "{source_name}_{clip_index:03d}",
             "size_multiple_enabled": False,
             "size_multiple_value": 32,
+            "resolution_align_mode": "inherit",
+            "preset_width": 0,
+            "preset_height": 0,
             "align_enabled": False,
             "align_x": 32,
             "align_y": 1,
@@ -267,6 +270,18 @@ class AppSettings:
         except (TypeError, ValueError):
             mv = int(data["size_multiple_value"])
         data["size_multiple_value"] = max(1, min(4096, mv))
+        ram = str(raw.get("resolution_align_mode", data["resolution_align_mode"]) or "").strip().lower()
+        data["resolution_align_mode"] = ram if ram in {"inherit", "align_width", "align_height"} else "inherit"
+        try:
+            pw = int(raw.get("preset_width", data["preset_width"]))
+        except (TypeError, ValueError):
+            pw = int(data["preset_width"])
+        data["preset_width"] = max(0, min(16384, pw))
+        try:
+            ph = int(raw.get("preset_height", data["preset_height"]))
+        except (TypeError, ValueError):
+            ph = int(data["preset_height"])
+        data["preset_height"] = max(0, min(16384, ph))
         data["align_enabled"] = bool(raw.get("align_enabled", data["align_enabled"]))
         try:
             ax = int(raw.get("align_x", data["align_x"]))
@@ -382,6 +397,12 @@ class AppSettings:
 
     def set_warn_align_8n1(self, v: bool) -> None:
         self._s.setValue("warn_align_8n1", int(v))
+
+    def auto_load_subtitle(self) -> bool:
+        return bool(int(self._s.value("auto_load_subtitle", 1)))
+
+    def set_auto_load_subtitle(self, v: bool) -> None:
+        self._s.setValue("auto_load_subtitle", int(v))
 
     def undo_max_steps(self) -> int:
         try:

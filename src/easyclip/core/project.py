@@ -58,7 +58,7 @@ class UndoState:
 
 @dataclass
 class ProjectData:
-    schema_version: int = 1
+    schema_version: int = 2
     source_path: str = ""
     proxy_path: str | None = None
     fps: float = 30.0
@@ -72,6 +72,8 @@ class ProjectData:
     redo_history: list[UndoState] = field(default_factory=list)
     created_at: str = ""
     updated_at: str = ""
+    subtitle_path: str | None = None
+    subtitle_enabled: bool = False
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -89,6 +91,8 @@ class ProjectData:
             "redo_history": [s.to_dict() for s in self.redo_history],
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "subtitle_path": self.subtitle_path,
+            "subtitle_enabled": self.subtitle_enabled,
         }
 
     @classmethod
@@ -107,8 +111,12 @@ class ProjectData:
         undo_history = [UndoState.from_dict(s) for s in undo_raw if isinstance(s, dict)]
         redo_raw = d.get("redo_history") or []
         redo_history = [UndoState.from_dict(s) for s in redo_raw if isinstance(s, dict)]
+        schema_ver = int(d.get("schema_version", 1))
+        subtitle_path = d.get("subtitle_path") if schema_ver >= 2 else None
+        subtitle_enabled = bool(d.get("subtitle_enabled", False)) if schema_ver >= 2 else False
+        # Always write the current schema version so v1 projects get upgraded on save.
         return cls(
-            schema_version=int(d.get("schema_version", 1)),
+            schema_version=2,
             source_path=str(d.get("source_path", "")),
             proxy_path=d.get("proxy_path"),
             fps=float(d.get("fps", 30.0)),
@@ -122,6 +130,8 @@ class ProjectData:
             redo_history=redo_history,
             created_at=str(d.get("created_at", "")),
             updated_at=str(d.get("updated_at", "")),
+            subtitle_path=subtitle_path,
+            subtitle_enabled=subtitle_enabled,
         )
 
 

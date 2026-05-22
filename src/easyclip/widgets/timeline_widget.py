@@ -72,6 +72,80 @@ def _format_time_sec(sec: float) -> str:
     return f"{m}:{s:04.1f}"
 
 
+def _format_time_precise(sec: float) -> str:
+    """Millisecond-precise time string for playhead / hover labels."""
+    if sec < 0:
+        sec = 0.0
+    ms = int(round(sec * 1000.0))
+    h, rem = divmod(ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}.{ms:03d}"
+    return f"{m}:{s:02d}.{ms:03d}"
+
+
+_TIME_LABEL_BG = QColor(0, 0, 0, 150)
+_TIME_LABEL_FG_HOVER = QColor(220, 200, 120)
+_TIME_LABEL_Y = 2
+_TIME_LABEL_PAD_H = 4
+_TIME_LABEL_PAD_V = 1
+
+
+def _draw_precise_time_labels(
+    painter: QPainter,
+    w: int,
+    x_for_frame,
+    current_frame: int,
+    hover_frame: int | None,
+    fps: float,
+    wc: WidgetColors,
+) -> None:
+    """Draw current-frame and hover time labels in the ruler area."""
+    painter.save()
+    try:
+        font = QFont()
+        font.setPixelSize(10)
+        painter.setFont(font)
+        fm = painter.fontMetrics()
+
+        # Current frame (playhead) time — always drawn
+        cur_sec = current_frame / max(fps, 1e-6)
+        cur_text = _format_time_precise(cur_sec)
+        cur_x = x_for_frame(current_frame)
+        _draw_time_label(painter, fm, cur_text, cur_x, w, wc.playhead_color)
+
+        # Hover time — drawn when mouse is inside the widget and differs from current
+        if hover_frame is not None and hover_frame != current_frame:
+            hover_sec = hover_frame / max(fps, 1e-6)
+            hover_text = _format_time_precise(hover_sec)
+            hover_x = x_for_frame(hover_frame)
+            _draw_time_label(painter, fm, hover_text, hover_x, w, _TIME_LABEL_FG_HOVER)
+    finally:
+        painter.restore()
+
+
+def _draw_time_label(
+    painter: QPainter,
+    fm,
+    text: str,
+    cx: int,
+    w: int,
+    fg: QColor,
+) -> None:
+    tw = fm.horizontalAdvance(text)
+    bw = tw + 2 * _TIME_LABEL_PAD_H
+    bh = fm.height() + 2 * _TIME_LABEL_PAD_V
+    # Clamp x so the label stays inside the widget
+    x = max(0, min(w - bw, cx - bw // 2))
+
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(_TIME_LABEL_BG)
+    painter.drawRoundedRect(QRect(x, _TIME_LABEL_Y, bw, bh), 3, 3)
+    painter.setPen(QPen(fg))
+    painter.drawText(x + _TIME_LABEL_PAD_H, _TIME_LABEL_Y + _TIME_LABEL_PAD_V + fm.ascent(), text)
+
+
 class TimelineWidget(QWidget):
     seek_frame = Signal(int)
     reset_view = Signal()
@@ -99,6 +173,7 @@ class TimelineWidget(QWidget):
         self._sync_crosshair_frame: int | None = None
         self._selected_clip_index: int | None = None
         self._hover_clip_index: int | None = None
+        self._hover_frame: int | None = None
         self.setMinimumHeight(RULER_H + 36)
         on_theme_changed(self._on_theme_changed)
 
@@ -191,7 +266,9 @@ class TimelineWidget(QWidget):
         if self._rmb_clip_idx is None:
             self.crosshair_hover.emit(None)
             self._set_hover_clip(None)
+            self._hover_frame = None
             QToolTip.hideText()
+        self.update()
         super().leaveEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
@@ -211,6 +288,7 @@ class TimelineWidget(QWidget):
             return
 
         self.crosshair_hover.emit(self._frame_at_x(px))
+        self._hover_frame = self._frame_at_x(px)
         hover_idx = self._clip_index_at_pos(px, py)
         self._set_hover_clip(hover_idx)
         if hover_idx is not None and 0 <= hover_idx < len(self._clips):
@@ -308,6 +386,19 @@ class TimelineWidget(QWidget):
                     xi = self._x_for_frame(g)
                     painter.drawLine(xi, RULER_H - 4, xi, RULER_H)
                 g += sub
+
+        # ── Precise time labels at playhead and hover positions ──
+        # Hover source: timeline mouse position first, then waveform crosshair
+        eff_hover = self._hover_frame
+        if eff_hover is None and self._sync_crosshair_frame is not None:
+            eff_hover = self._sync_crosshair_frame
+        # Compute crosshair top so it stops just below the time label
+        label_h = painter.fontMetrics().height() + 2 * _TIME_LABEL_PAD_V
+        crosshair_top = _TIME_LABEL_Y + label_h + 2
+        _draw_precise_time_labels(
+            painter, w, self._x_for_frame, self._current,
+            eff_hover, self._fps, self._wc,
+        )
 
         ty0 = RULER_H + TRACK_PAD
         ty1 = h - TRACK_PAD
@@ -409,7 +500,7 @@ class TimelineWidget(QWidget):
             hx = self._x_for_frame(self._sync_crosshair_frame)
             if 0 <= hx < w:
                 painter.setPen(QPen(self._wc.crosshair_color, 1))
-                painter.drawLine(hx, 0, hx, h)
+                painter.drawLine(hx, crosshair_top, hx, h)
 
         painter.setPen(QPen(self._wc.timeline_border))
         painter.drawRect(0, 0, w - 1, h - 1)

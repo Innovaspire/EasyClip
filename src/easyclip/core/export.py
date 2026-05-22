@@ -19,6 +19,7 @@ from easyclip.core.align_io import (
 )
 from easyclip.core.ffmpeg_util import FfmpegEncodeProgress, export_clip_mp4, probe_has_audio
 from easyclip.core.project import ProjectData
+from easyclip.core.subtitle import SubtitleTrack, cut_subtitle_track, parse_subtitle_file, write_subtitle_file
 from easyclip.core.timebase import Timebase
 
 DEFAULT_EXPORT_FILENAME_TEMPLATE = "{source_name}_{clip_index:03d}"
@@ -147,6 +148,7 @@ def export_all_clips(
     cancel_check: Callable[[], bool] | None = None,
     on_clip_begin: Callable[[int, int, int, float], None] | None = None,
     stderr_line_hook: Callable[[str], None] | None = None,
+    subtitle_source_path: str | None = None,
 ) -> list[tuple[str, str]]:
     """
     Export each closed clip to output_dir / clip_<id>.mp4.
@@ -190,6 +192,15 @@ def export_all_clips(
         source_has_audio = probe_has_audio(data.source_path)
     except Exception:  # noqa: BLE001
         source_has_audio = True
+    # Cached subtitle track (parsed once, used per clip)
+    _subtitle_track: SubtitleTrack | None = None
+    _subtitle_track_cache_path: str | None = None
+    if subtitle_source_path:
+        try:
+            _subtitle_track = parse_subtitle_file(subtitle_source_path)
+        except Exception:
+            _subtitle_track = None
+        _subtitle_track_cache_path = subtitle_source_path
     n = len(to_export)
     for idx, clip in enumerate(to_export):
         if cancel_check and cancel_check():
@@ -333,4 +344,31 @@ def export_all_clips(
             cancel_check=cancel_check,
             stderr_line_hook=stderr_line_hook,
         )
+        # ------------------------------------------------------------------
+        # Subtitle cutting: export matching subtitle file alongside the clip.
+        # Use the actual output video duration (which may differ from the
+        # source duration when export_fps != source_fps):
+        #   - Strict mode:    n_target_frames / export_fps  (exact)
+        #   - Non-strict:     round(duration * export_fps) / export_fps
+        #     The default fps filter uses round=near, so we use round() to
+        #     match; n_out from output_frame_count() uses floor() and can
+        #     be 1 frame short.
+        # ------------------------------------------------------------------
+        if _subtitle_track is not None and _subtitle_track.entries:
+            if n_target_frames is not None:
+                output_duration_sec = n_target_frames / float(export_fps)
+            else:
+                output_duration_sec = round(duration * export_fps) / float(export_fps)
+            clip_start_sec = float(t0)
+            clip_end_sec = float(t0) + output_duration_sec
+            cut_track = cut_subtitle_track(_subtitle_track, clip_start_sec, clip_end_sec)
+            if cut_track.entries:
+                sub_ext = ".vtt" if _subtitle_track.format.value == "vtt" else ".srt"
+                if _subtitle_track.format.value in ("ass", "ssa"):
+                    sub_ext = "." + _subtitle_track.format.value
+                sub_path = dst.with_suffix(sub_ext)
+                try:
+                    write_subtitle_file(cut_track, sub_path)
+                except Exception:
+                    pass  # Subtitle export failure should not block video export
     return messages

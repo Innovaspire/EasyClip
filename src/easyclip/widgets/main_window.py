@@ -49,10 +49,11 @@ from PySide6.QtGui import (
     QWheelEvent,
 )
 from PySide6.QtMultimedia import QAudioOutput, QMediaDevices, QMediaPlayer
-from PySide6.QtMultimediaWidgets import QVideoWidget
+from PySide6.QtMultimedia import QVideoSink
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QButtonGroup,
     QFileDialog,
     QFrame,
     QFormLayout,
@@ -116,6 +117,7 @@ from easyclip.core.settings import (
     StartupBehavior,
     default_projects_root,
 )
+from easyclip.core.subtitle import SubtitleTrack, find_matching_subtitle, parse_subtitle_file
 from easyclip.core.theme import (
     Theme,
     WidgetColors,
@@ -133,7 +135,7 @@ from easyclip.core.waveform_gen import (
 )
 from easyclip.i18n.strings import tr
 from easyclip.widgets.timeline_widget import TimelineWidget
-from easyclip.widgets.video_preview_drop_shim import VideoPreviewDropShim
+from easyclip.widgets.video_preview_widget import VideoPreviewWidget
 from easyclip.widgets.waveform_widget import WaveformWidget
 
 
@@ -469,6 +471,7 @@ class ExportWorker(QObject):
         cancel_flag: list[bool],
         host_thread: QThread,
         ui_bridge: _ExportUIBridge,
+        subtitle_source_path: str | None = None,
     ) -> None:
         super().__init__()
         self._proj = data
@@ -494,6 +497,7 @@ class ExportWorker(QObject):
         self._cancel_flag = cancel_flag
         self._host_thread = host_thread
         self._ui_bridge = ui_bridge
+        self._subtitle_source_path = subtitle_source_path
 
     def _cancel_check(self) -> bool:
         return bool(self._cancel_flag[0]) or self._host_thread.isInterruptionRequested()
@@ -542,6 +546,7 @@ class ExportWorker(QObject):
                         int(i + 1), int(n_clips), int(l), float(d)
                     ),
                     stderr_line_hook=lambda ln: self._ui_bridge.stderr_line.emit(ln),
+                    subtitle_source_path=self._subtitle_source_path,
                 )
             except InterruptedError:
                 self.cancelled.emit()
@@ -664,22 +669,21 @@ class MainWindow(QMainWindow):
         self._audio_default_poll.setTimerType(Qt.TimerType.CoarseTimer)
         self._audio_default_poll.setInterval(2000)
         self._audio_default_poll.timeout.connect(self._sync_audio_output_to_system_default)
-        self._video_widget = QVideoWidget(self)
-        self._player.setVideoOutput(self._video_widget)
-        self._preview_label = QLabel(self)
-        self._preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview_label.setStyleSheet(widget_colors().preview_label_ss)
-        self._preview_label.setText(tr("drop.hint"))
-        self._preview_label.show()
-        # QVideoWidget 内部有原生视频层，兄弟 QWidget 会被压在下面；拖放/鼠标由「子控件」接（见 VideoPreviewDropShim）
-        self._video_widget.hide()
-        self._video_drop_host = QWidget(self)
-        _vdh = QGridLayout(self._video_drop_host)
-        _vdh.setContentsMargins(0, 0, 0, 0)
-        _vdh.addWidget(self._video_widget, 0, 0)
-        self._video_preview_shim = VideoPreviewDropShim(self._video_widget, VIDEO_OPEN_SUFFIXES)
-        self._video_preview_shim.video_dropped.connect(self._request_load_video_path)
+        self._video_sink = QVideoSink(self)
+        self._player.setVideoSink(self._video_sink)
+        self._preview_label_placeholder = QLabel(self)
+        self._preview_label_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._preview_label_placeholder.setStyleSheet(widget_colors().preview_label_ss)
+        self._preview_label_placeholder.setText(tr("drop.hint"))
+        self._preview_label_placeholder.show()
+        self._video_preview_widget = VideoPreviewWidget(self._player, self)
+        self._video_preview_widget.hide()
+        self._video_preview_widget.video_dropped.connect(self._request_load_video_path)
+        self._video_sink.videoFrameChanged.connect(self._video_preview_widget.set_video_frame)
+        # Subtitle state
+        self._subtitle_track: SubtitleTrack | None = None
         self._player.positionChanged.connect(self._on_player_position)
+        self._player.positionChanged.connect(self._video_preview_widget.update_subtitle_position)
         self._player.playbackStateChanged.connect(self._on_playback_state)
         self._player.mediaStatusChanged.connect(self._on_media_status_changed)
         self._seek_apply_timer = QTimer(self)
@@ -899,8 +903,8 @@ class MainWindow(QMainWindow):
         self._source_path_label.setToolTip(tr("source_path.toggle_tooltip"))
         self._refresh_source_path_label()
         center_stack.addWidget(self._source_path_label)
-        center_stack.addWidget(self._video_drop_host, stretch=1)
-        center_stack.addWidget(self._preview_label, stretch=1)
+        center_stack.addWidget(self._video_preview_widget, stretch=1)
+        center_stack.addWidget(self._preview_label_placeholder, stretch=1)
         self._center_drop_widget = QWidget()
         self._center_drop_widget.setLayout(center_stack)
         self._center_drop_widget.setMinimumWidth(520)
@@ -981,7 +985,7 @@ class MainWindow(QMainWindow):
         self._drop_targets = (
             self._left_drop_widget,
             self._center_drop_widget,
-            self._preview_label,
+            self._preview_label_placeholder,
             self._right_drop_widget,
             self._thumb_start,
             self._thumb_end,
@@ -995,7 +999,6 @@ class MainWindow(QMainWindow):
             w.setAcceptDrops(True)
             w.installEventFilter(self)
 
-        QTimer.singleShot(0, self._raise_video_preview_shim)
         QTimer.singleShot(0, self._refresh_min_window_size)
 
         self._build_menu()
@@ -1022,6 +1025,16 @@ class MainWindow(QMainWindow):
         act_clear_proxy = QAction(tr("menu.clear_proxy"), self)
         act_clear_proxy.triggered.connect(self._clear_all_proxies)
         m_file.addAction(act_clear_proxy)
+        m_file.addSeparator()
+        self._act_load_subtitle = QAction(tr("menu.load_subtitle"), self)
+        self._act_load_subtitle.triggered.connect(self._load_subtitle_dialog)
+        self._act_load_subtitle.setEnabled(False)
+        m_file.addAction(self._act_load_subtitle)
+        self._act_unload_subtitle = QAction(tr("menu.unload_subtitle"), self)
+        self._act_unload_subtitle.triggered.connect(self._unload_subtitle)
+        self._act_unload_subtitle.setEnabled(False)
+        m_file.addAction(self._act_unload_subtitle)
+        m_file.addSeparator()
         self._act_export = QAction(tr("menu.export"), self)
         self._act_export.triggered.connect(self._export_clips)
         self._act_export.setEnabled(False)
@@ -1195,10 +1208,11 @@ class MainWindow(QMainWindow):
             self._startup_restore_checked = True
             QTimer.singleShot(0, self._maybe_restore_last_project_on_startup)
 
+    # ------------------------------------------------------------------
+    # Native Win32 timer — fires during DefWindowProc modal drag loop
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._maybe_init_preview_wave_split_sizes()
-        self._raise_video_preview_shim()
         if not self._preview_uses_qt:
             self._refresh_frame_preview()
 
@@ -1291,7 +1305,7 @@ class MainWindow(QMainWindow):
 
     def _on_theme_changed(self, wc: WidgetColors) -> None:
         """Reapply all inline stylesheets and icons when the theme changes."""
-        self._preview_label.setStyleSheet(wc.preview_label_ss)
+        self._preview_label_placeholder.setStyleSheet(wc.preview_label_ss)
         self._thumb_duration_label.setStyleSheet(wc.thumb_duration_ss)
         self._source_path_label.setStyleSheet(wc.source_path_ss)
         self._preview_wave_split.setStyleSheet(wc.splitter_ss)
@@ -1369,7 +1383,16 @@ class MainWindow(QMainWindow):
         # Tooltips and dynamic state
         self._refresh_transport_tooltips()
         self._refresh_undo_menu_state()
+        self._refresh_subtitle_menu_state()
         self.setWindowTitle(tr("app.title"))
+
+    def _refresh_subtitle_menu_state(self) -> None:
+        has_video = bool(self._data.source_path)
+        has_subtitle = self._subtitle_track is not None
+        if self._act_load_subtitle is not None:
+            self._act_load_subtitle.setEnabled(has_video)
+        if self._act_unload_subtitle is not None:
+            self._act_unload_subtitle.setEnabled(has_subtitle)
 
     def _set_clip_loop_button_checked(self, checked: bool) -> None:
         self._btn_clip_loop.blockSignals(True)
@@ -1885,6 +1908,9 @@ class MainWindow(QMainWindow):
         export_filename_template: str = DEFAULT_EXPORT_FILENAME_TEMPLATE,
         size_multiple_enabled: bool = False,
         size_multiple_value: int = 32,
+        resolution_align_mode: str = "inherit",
+        preset_width: int = 0,
+        preset_height: int = 0,
         align_enabled: bool = False,
         align_x: int = 32,
         align_y: int = 1,
@@ -1900,6 +1926,9 @@ class MainWindow(QMainWindow):
         aa = str(align_apply or "tail").strip().lower()
         if aa not in {"tail", "head", "symmetric"}:
             aa = "tail"
+        ram = str(resolution_align_mode or "inherit").strip().lower()
+        if ram not in {"inherit", "align_width", "align_height"}:
+            ram = "inherit"
         payload: dict[str, Any] = {
             "id": str(preset_id or uuid.uuid4().hex),
             "name": str(name or "").strip() or tr("export.preset.default_name"),
@@ -1917,6 +1946,9 @@ class MainWindow(QMainWindow):
             ),
             "size_multiple_enabled": bool(size_multiple_enabled),
             "size_multiple_value": max(1, min(4096, int(size_multiple_value))),
+            "resolution_align_mode": ram,
+            "preset_width": max(0, min(16384, int(preset_width))),
+            "preset_height": max(0, min(16384, int(preset_height))),
             "align_enabled": bool(align_enabled),
             "align_x": ax,
             "align_y": ay,
@@ -2179,6 +2211,62 @@ class MainWindow(QMainWindow):
         row_fps_lay.addStretch(1)
         export_form.addRow(tr("settings.export_fps"), row_fps)
 
+        row_res_mode = QWidget(tab_export)
+        row_res_mode_lay = QHBoxLayout(row_res_mode)
+        row_res_mode_lay.setContentsMargins(0, 0, 0, 0)
+        row_res_mode_lay.setSpacing(12)
+
+        res_align_group = QButtonGroup(row_res_mode)
+        rb_inherit_res = QRadioButton(tr("settings.resolution_align_mode.inherit"), row_res_mode)
+        rb_inherit_res.setChecked(True)
+        res_align_group.addButton(rb_inherit_res)
+
+        rb_align_w = QRadioButton(tr("settings.resolution_align_mode.align_width"), row_res_mode)
+        sb_preset_w = QSpinBox(row_res_mode)
+        sb_preset_w.setRange(1, 16384)
+        sb_preset_w.setValue(1920)
+        sb_preset_w.setEnabled(False)
+        res_align_group.addButton(rb_align_w)
+
+        rb_align_h = QRadioButton(tr("settings.resolution_align_mode.align_height"), row_res_mode)
+        sb_preset_h = QSpinBox(row_res_mode)
+        sb_preset_h.setRange(1, 16384)
+        sb_preset_h.setValue(1080)
+        sb_preset_h.setEnabled(False)
+        res_align_group.addButton(rb_align_h)
+
+        row_res_mode_lay.addWidget(rb_inherit_res)
+        row_res_mode_lay.addWidget(rb_align_w)
+        row_res_mode_lay.addWidget(sb_preset_w)
+        row_res_mode_lay.addWidget(rb_align_h)
+        row_res_mode_lay.addWidget(sb_preset_h)
+        row_res_mode_lay.addStretch(1)
+        export_form.addRow(tr("settings.resolution_align_mode"), row_res_mode)
+
+        def _on_res_align_mode_changed() -> None:
+            mode = _get_current_res_align_mode()
+            sb_preset_w.setEnabled(mode == "align_width")
+            sb_preset_h.setEnabled(mode == "align_height")
+
+        def _get_current_res_align_mode() -> str:
+            if rb_align_w.isChecked():
+                return "align_width"
+            elif rb_align_h.isChecked():
+                return "align_height"
+            else:
+                return "inherit"
+
+        def _set_res_align_mode(mode: str) -> None:
+            if mode == "align_width":
+                rb_align_w.setChecked(True)
+            elif mode == "align_height":
+                rb_align_h.setChecked(True)
+            else:
+                rb_inherit_res.setChecked(True)
+            _on_res_align_mode_changed()
+
+        res_align_group.buttonClicked.connect(lambda _b: _on_res_align_mode_changed())
+
         row_multiple = QWidget(tab_export)
         row_multiple_lay = QHBoxLayout(row_multiple)
         row_multiple_lay.setContentsMargins(0, 0, 0, 0)
@@ -2311,6 +2399,10 @@ class MainWindow(QMainWindow):
 
         def _refresh_rate_enabled() -> None:
             sb_bitrate.setEnabled(rb_bitrate.isChecked() and not cb_bitrate_match_source.isChecked())
+            if rb_bitrate.isChecked() and cb_bitrate_match_source.isChecked():
+                sb_bitrate.setToolTip(tr("export.options.bitrate_match_source_disabled_tip"))
+            else:
+                sb_bitrate.setToolTip("")
             sb_quality.setEnabled(rb_quality.isChecked())
             sb_fps.setEnabled(not cb_inherit_fps.isChecked())
             cb_bitrate_match_source.setEnabled(rb_bitrate.isChecked())
@@ -2343,6 +2435,9 @@ class MainWindow(QMainWindow):
                 ),
                 "size_multiple_enabled": bool(cb_multiple.isChecked()),
                 "size_multiple_value": max(1, min(4096, int(sb_multiple.value()))),
+                "resolution_align_mode": _get_current_res_align_mode(),
+                "preset_width": max(0, min(16384, int(sb_preset_w.value()))),
+                "preset_height": max(0, min(16384, int(sb_preset_h.value()))),
                 "align_enabled": bool(cb_p_align_enabled.isChecked()),
                 "align_x": max(1, min(1024, int(sb_p_align_x.value()))),
                 "align_y": int(sb_p_align_y.value()) % max(1, sb_p_align_x.value()),
@@ -2371,6 +2466,9 @@ class MainWindow(QMainWindow):
                 export_filename_template=str(st["export_filename_template"]),
                 size_multiple_enabled=bool(st["size_multiple_enabled"]),
                 size_multiple_value=int(st["size_multiple_value"]),
+                resolution_align_mode=str(st["resolution_align_mode"]),
+                preset_width=int(st["preset_width"]),
+                preset_height=int(st["preset_height"]),
                 align_enabled=bool(st["align_enabled"]),
                 align_x=int(st["align_x"]),
                 align_y=int(st["align_y"]),
@@ -2387,6 +2485,9 @@ class MainWindow(QMainWindow):
             aa = str(payload.get("align_apply", "tail") or "tail")
             if aa not in {"tail", "head", "symmetric"}:
                 aa = "tail"
+            ram = str(payload.get("resolution_align_mode", "inherit") or "inherit").strip().lower()
+            if ram not in {"inherit", "align_width", "align_height"}:
+                ram = "inherit"
             return {
                 "name": str(payload.get("name", "") or "").strip(),
                 "export_fps": max(1, min(240, int(payload.get("export_fps", self._settings.export_fps())))),
@@ -2406,6 +2507,9 @@ class MainWindow(QMainWindow):
                 ),
                 "size_multiple_enabled": bool(payload.get("size_multiple_enabled", False)),
                 "size_multiple_value": max(1, min(4096, int(payload.get("size_multiple_value", 32)))),
+                "resolution_align_mode": ram,
+                "preset_width": max(0, min(16384, int(payload.get("preset_width", 0)))),
+                "preset_height": max(0, min(16384, int(payload.get("preset_height", 0)))),
                 "align_enabled": bool(payload.get("align_enabled", False)),
                 "align_x": ax,
                 "align_y": ay,
@@ -2453,7 +2557,12 @@ class MainWindow(QMainWindow):
                 )
                 cb_multiple.setChecked(bool(preset.get("size_multiple_enabled", False)))
                 sb_multiple.setValue(max(1, min(4096, int(preset.get("size_multiple_value", 2)))))
-                st_align = _preset_state_from_payload(preset)
+                st_res = _preset_state_from_payload(preset)
+                ram = str(st_res["resolution_align_mode"])
+                _set_res_align_mode(ram)
+                sb_preset_w.setValue(max(0, min(16384, int(st_res["preset_width"]))) or 1920)
+                sb_preset_h.setValue(max(0, min(16384, int(st_res["preset_height"]))) or 1080)
+                st_align = st_res
                 cb_p_align_enabled.setChecked(bool(st_align["align_enabled"]))
                 sb_p_align_x.setValue(int(st_align["align_x"]))
                 sb_p_align_y.setValue(int(st_align["align_y"]))
@@ -2689,12 +2798,70 @@ class MainWindow(QMainWindow):
             self._data.proxy_path = None
             self._save_project()
             if self._data.source_path:
-                self._set_qt_preview_source(Path(self._data.source_path))
+                self._show_video_preview(Path(self._data.source_path))
         QMessageBox.information(
             self,
             tr("settings.clear_proxies.title"),
             tr("settings.clear_proxies.done", deleted=deleted, failed=failed),
         )
+
+    # ------------------------------------------------------------------
+    # Subtitle load / unload
+    # ------------------------------------------------------------------
+
+    def _load_subtitle_dialog(self) -> None:
+        start = self._settings.last_open_video_dir() or ""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            tr("subtitle.load_dialog_title"),
+            start,
+            "Subtitles (*.srt *.vtt *.ass *.ssa *.sub);;All (*.*)",
+        )
+        if not path:
+            return
+        self._load_subtitle_path(Path(path))
+
+    def _load_subtitle_path(self, sub_path: Path) -> None:
+        try:
+            track = parse_subtitle_file(sub_path)
+        except Exception as e:
+            QMessageBox.warning(self, tr("subtitle.load_dialog_title"), tr("subtitle.parse_error", error=str(e)))
+            return
+        self._subtitle_track = track
+        self._data.subtitle_path = str(sub_path.resolve())
+        self._data.subtitle_enabled = True
+        self._video_preview_widget.set_subtitle_track(track)
+        self._act_load_subtitle.setEnabled(True)
+        self._act_unload_subtitle.setEnabled(True)
+        self._save_project()
+        self._status(tr("subtitle.status_loaded", filename=sub_path.name))
+
+    def _unload_subtitle(self) -> None:
+        self._subtitle_track = None
+        self._data.subtitle_enabled = False
+        # Keep subtitle_path so we know the user explicitly unloaded
+        # (vs a fresh project that never had a subtitle).
+        self._video_preview_widget.set_subtitle_track(None)
+        self._act_unload_subtitle.setEnabled(False)
+        self._save_project()
+        self._status(tr("subtitle.status_unloaded"))
+
+    def _auto_detect_subtitle(self, video_path: Path) -> None:
+        if not self._settings.auto_load_subtitle():
+            return
+        candidate = find_matching_subtitle(video_path)
+        if candidate is not None:
+            try:
+                track = parse_subtitle_file(candidate)
+            except Exception:
+                return
+            self._subtitle_track = track
+            self._data.subtitle_path = str(candidate.resolve())
+            self._data.subtitle_enabled = True
+            self._video_preview_widget.set_subtitle_track(track)
+            self._act_unload_subtitle.setEnabled(True)
+            self._save_project()
+            self._status(tr("subtitle.status_loaded", filename=candidate.name))
 
     def _clear_home_cache(self, parent: QWidget, button: QPushButton) -> None:
         target = default_projects_root()
@@ -2814,6 +2981,11 @@ class MainWindow(QMainWindow):
         self._player.stop()
         self._player.setSource(QUrl())
         self._clear_clip_loop()
+        # Clear previous subtitle state on video switch
+        self._subtitle_track = None
+        self._video_preview_widget.set_subtitle_track(None)
+        self._act_load_subtitle.setEnabled(False)
+        self._act_unload_subtitle.setEnabled(False)
 
         probe = probe_video(source)
         self._tb = Timebase.from_probe(probe)
@@ -2888,7 +3060,7 @@ class MainWindow(QMainWindow):
 
         # Default behavior: never auto-attach proxy on project/video load.
         # Proxy preview is opt-in and should only be used after an explicit user action.
-        self._set_qt_preview_source(source)
+        self._show_video_preview(source)
 
         self._update_timeline()
         self._source_path_show_full = False
@@ -2896,6 +3068,35 @@ class MainWindow(QMainWindow):
         self._status("")
         self._settings.set_last_open_video_dir(str(source.parent))
         self._settings.set_last_open_source_path(str(source.resolve()))
+        # Enable subtitle load menu item (video is loaded now)
+        self._act_load_subtitle.setEnabled(True)
+        # Restore subtitle from project state
+        if self._data.subtitle_path and self._data.subtitle_enabled:
+            # User had a subtitle loaded last session — try to restore it
+            if Path(self._data.subtitle_path).is_file():
+                try:
+                    track = parse_subtitle_file(self._data.subtitle_path)
+                except Exception:
+                    track = None
+                if track is not None:
+                    self._subtitle_track = track
+                    self._video_preview_widget.set_subtitle_track(track)
+                    self._act_unload_subtitle.setEnabled(True)
+                    self._status(tr("subtitle.status_loaded", filename=Path(self._data.subtitle_path).name))
+                else:
+                    self._data.subtitle_path = None
+                    self._data.subtitle_enabled = False
+            else:
+                # File was moved/deleted — clear and fall through to auto-detect
+                self._data.subtitle_path = None
+                self._data.subtitle_enabled = False
+                self._auto_detect_subtitle(source)
+        elif self._data.subtitle_path and not self._data.subtitle_enabled:
+            # User explicitly unloaded last session — respect that, don't auto-detect
+            self._act_unload_subtitle.setEnabled(False)
+        else:
+            # Fresh project — auto-detect
+            self._auto_detect_subtitle(source)
 
     def _start_proxy_build(self) -> None:
         assert self._store is not None
@@ -2927,31 +3128,18 @@ class MainWindow(QMainWindow):
         self._attach_proxy(self._store.proxy_path)
         self._status("")
 
-    def _set_qt_preview_source(self, path: Path) -> None:
+    def _show_video_preview(self, path: Path) -> None:
         self._preview_uses_qt = True
-        self._preview_label.hide()
-        self._video_widget.show()
-        # After setSource(), backends may ignore immediate setPosition before media is ready.
-        # Keep a one-shot "seek when ready" fallback so restored frame is reliably applied.
+        self._preview_label_placeholder.hide()
+        self._video_preview_widget.show()
         self._seek_after_source_ready = True
         self._player.setSource(QUrl.fromLocalFile(str(path.resolve())))
         self._player.pause()
         self._seek_media_to_frame(seek_now=True)
         self._btn_play.setText("▶")
-        self._raise_video_preview_shim()
-
-    def _raise_video_preview_shim(self) -> None:
-        if getattr(self, "_video_preview_shim", None) is None:
-            return
-        self._video_preview_shim.setGeometry(0, 0, max(1, self._video_widget.width()), max(1, self._video_widget.height()))
-        self._video_preview_shim.show()
-        self._video_preview_shim.raise_()
-        QTimer.singleShot(0, self._video_preview_shim.raise_)
-        QTimer.singleShot(150, self._video_preview_shim.raise_)
-        QTimer.singleShot(500, self._video_preview_shim.raise_)
 
     def _attach_proxy(self, path: Path) -> None:
-        self._set_qt_preview_source(path)
+        self._show_video_preview(path)
 
     def _start_waveform_build(self, session_gen: int, *, has_audio: bool) -> None:
         if not self._data.source_path or not self._store:
@@ -4415,10 +4603,10 @@ class MainWindow(QMainWindow):
         try:
             png = extract_frame_png(Path(self._data.source_path), self._tb.frame_to_time(self._current_frame))
             img = QImage.fromData(png, "PNG")
-            self._preview_label.setPixmap(
+            self._preview_label_placeholder.setPixmap(
                 QPixmap.fromImage(img).scaled(
-                    self._preview_label.width(),
-                    self._preview_label.height(),
+                    self._preview_label_placeholder.width(),
+                    self._preview_label_placeholder.height(),
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation,
                 )
@@ -4704,6 +4892,11 @@ class MainWindow(QMainWindow):
         )
         preset_multiple_enabled = bool(default_preset.get("size_multiple_enabled", False))
         preset_multiple_value = max(1, min(4096, int(default_preset.get("size_multiple_value", 32))))
+        preset_res_align_mode = str(default_preset.get("resolution_align_mode", "inherit") or "inherit").strip().lower()
+        if preset_res_align_mode not in {"inherit", "align_width", "align_height"}:
+            preset_res_align_mode = "inherit"
+        preset_target_width = max(0, min(16384, int(default_preset.get("preset_width", 0))))
+        preset_target_height = max(0, min(16384, int(default_preset.get("preset_height", 0))))
         ax0 = max(1, min(1024, int(default_preset.get("align_x", 32))))
         ay0 = int(default_preset.get("align_y", 1)) % ax0
         ar0 = str(default_preset.get("align_round", "ceil") or "ceil")
@@ -4938,27 +5131,32 @@ class MainWindow(QMainWindow):
         row_res_lay.addStretch(1)
         form.addRow(row_res_title, row_res)
 
-        row_multiple = QWidget(dlg)
+        lay.addLayout(form)
+
+        gb_balance = QGroupBox(tr("export.options.edge_adjust.title"), dlg)
+        gb_balance_root = QVBoxLayout(gb_balance)
+        gb_balance_root.setSpacing(8)
+
+        row_multiple = QWidget(gb_balance)
         row_multiple_lay = QHBoxLayout(row_multiple)
         row_multiple_lay.setContentsMargins(0, 0, 0, 0)
         row_multiple_lay.setSpacing(8)
-        cb_multiple = QCheckBox(tr("export.options.multiple_enable"), dlg)
-        sb_multiple = QSpinBox(dlg)
+        cb_multiple = QCheckBox(tr("export.options.multiple_enable"), gb_balance)
+        sb_multiple = QSpinBox(gb_balance)
         sb_multiple.setRange(1, 4096)
         sb_multiple.setValue(preset_multiple_value)
         cb_multiple.setChecked(preset_multiple_enabled)
         row_multiple_lay.addWidget(cb_multiple)
         row_multiple_lay.addWidget(sb_multiple)
-        row_multiple_lay.addWidget(QLabel(tr("export.options.multiple_suffix"), dlg))
-        lb_multiple_info = QLabel("ℹ️", dlg)
+        row_multiple_lay.addWidget(QLabel(tr("export.options.multiple_suffix"), gb_balance))
+        lb_multiple_info = QLabel("ℹ️", gb_balance)
         lb_multiple_info.setToolTip(tr("export.options.multiple_tip"))
         row_multiple_lay.addWidget(lb_multiple_info)
         row_multiple_lay.addStretch(1)
-        form.addRow("", row_multiple)
-        lay.addLayout(form)
+        gb_balance_root.addWidget(row_multiple)
 
-        gb_balance = QGroupBox(tr("export.options.edge_adjust.title"), dlg)
-        gb_balance_lay = QFormLayout(gb_balance)
+        gb_balance_lay = QFormLayout()
+        gb_balance_lay.setSpacing(6)
         lb_edge_hint = QLabel(tr("export.options.edge_adjust.hint"), gb_balance)
         lb_edge_hint.setWordWrap(True)
         gb_balance_lay.addRow(lb_edge_hint)
@@ -5022,6 +5220,20 @@ class MainWindow(QMainWindow):
         row_v_adjust_lay.addWidget(bottom_group)
         row_v_adjust_lay.addStretch(1)
         gb_balance_lay.addRow(tr("export.options.edge_adjust.vertical"), row_v_adjust)
+        gb_balance_root.addLayout(gb_balance_lay)
+
+        row_quick_btns = QWidget(gb_balance)
+        row_quick_btns_lay = QHBoxLayout(row_quick_btns)
+        row_quick_btns_lay.setContentsMargins(0, 4, 0, 0)
+        row_quick_btns_lay.setSpacing(10)
+        btn_min_crop = QPushButton(tr("export.options.edge_adjust.min_crop"), gb_balance)
+        btn_min_pad = QPushButton(tr("export.options.edge_adjust.min_pad"), gb_balance)
+        btn_min_crop.setEnabled(cb_multiple.isChecked())
+        btn_min_pad.setEnabled(cb_multiple.isChecked())
+        row_quick_btns_lay.addWidget(btn_min_crop)
+        row_quick_btns_lay.addWidget(btn_min_pad)
+        row_quick_btns_lay.addStretch(1)
+        gb_balance_root.addWidget(row_quick_btns)
         lay.addWidget(gb_balance)
 
         row_name_tpl = QWidget(dlg)
@@ -5038,7 +5250,14 @@ class MainWindow(QMainWindow):
         btn_name_tpl_help.clicked.connect(lambda: self._show_filename_template_help(dlg))
         row_name_tpl_lay.addWidget(edit_filename_template, stretch=1)
         row_name_tpl_lay.addWidget(btn_name_tpl_help)
-        form.addRow(tr("export.filename_template.label"), row_name_tpl)
+
+        row_name_tpl_wrap = QWidget(dlg)
+        row_name_tpl_wrap_lay = QHBoxLayout(row_name_tpl_wrap)
+        row_name_tpl_wrap_lay.setContentsMargins(0, 0, 0, 0)
+        row_name_tpl_wrap_lay.setSpacing(8)
+        row_name_tpl_wrap_lay.addWidget(QLabel(tr("export.filename_template.label"), dlg))
+        row_name_tpl_wrap_lay.addWidget(row_name_tpl, stretch=1)
+        lay.addWidget(row_name_tpl_wrap)
 
         lay.addSpacing(8)
         lb_preview = QLabel("", dlg)
@@ -5112,6 +5331,7 @@ class MainWindow(QMainWindow):
         syncing_dim = [False]
         syncing_edges = [False]
         command_only = [""]
+        current_res_align_mode = [preset_res_align_mode]
 
         def _resolved_codec() -> str:
             requested = str(cb_codec.currentData() or "auto").strip().lower()
@@ -5141,15 +5361,6 @@ class MainWindow(QMainWindow):
                 spin.setSuffix(tr("export.options.delta_suffix_pad"))
             else:
                 spin.setSuffix(tr("export.options.delta_suffix_none"))
-
-        def nearest_multiple(v: int, m: int) -> int:
-            if m <= 1:
-                return max(1, v)
-            low = (v // m) * m
-            high = low + m
-            if low <= 0:
-                return max(1, high)
-            return low if (v - low) <= (high - v) else high
 
         def _content_resolution() -> tuple[int, int]:
             if cb_inherit_res.isChecked():
@@ -5223,6 +5434,31 @@ class MainWindow(QMainWindow):
             _set_delta_suffix(sb_top)
             _set_delta_suffix(sb_bottom)
 
+        def _apply_min_crop_solution() -> None:
+            """Auto-fill edge deltas with the minimal crop-only solution on both axes."""
+            if not cb_multiple.isChecked():
+                return
+            bw, bh = _content_resolution()
+            m = max(1, sb_multiple.value())
+            _, crop_x = _axis_needs(bw, m)
+            _, crop_y = _axis_needs(bh, m)
+            cl = crop_x // 2
+            cr = crop_x - cl
+            ct = crop_y // 2
+            cb_val = crop_y - ct
+            syncing_edges[0] = True
+            try:
+                sb_left.setValue(-cl)
+                sb_right.setValue(-cr)
+                sb_top.setValue(-ct)
+                sb_bottom.setValue(-cb_val)
+            finally:
+                syncing_edges[0] = False
+            _set_delta_suffix(sb_left)
+            _set_delta_suffix(sb_right)
+            _set_delta_suffix(sb_top)
+            _set_delta_suffix(sb_bottom)
+
         def _apply_runtime_preset(preset: dict[str, Any], *, recompute_padding: bool) -> None:
             codec = str(preset.get("export_video_codec", "auto") or "auto").strip().lower()
             idx_codec = cb_codec.findData(codec)
@@ -5241,6 +5477,28 @@ class MainWindow(QMainWindow):
             )
             cb_multiple.setChecked(bool(preset.get("size_multiple_enabled", False)))
             sb_multiple.setValue(max(1, min(4096, int(preset.get("size_multiple_value", 32)))))
+            # Apply resolution align mode from preset
+            ram = str(preset.get("resolution_align_mode", "inherit") or "inherit").strip().lower()
+            if ram not in {"inherit", "align_width", "align_height"}:
+                ram = "inherit"
+            current_res_align_mode[0] = ram
+            pw = max(0, min(16384, int(preset.get("preset_width", 0))))
+            ph = max(0, min(16384, int(preset.get("preset_height", 0))))
+            if ram == "inherit":
+                cb_inherit_res.setChecked(True)
+            elif ram == "align_width":
+                cb_inherit_res.setChecked(False)
+                target_w = pw if pw > 0 else source_vis_w
+                sb_w.setValue(target_w)
+                # auto-calculate height from aspect ratio
+                h = max(1, int(round(target_w / max(1e-9, source_aspect))))
+                sb_h.setValue(h)
+            elif ram == "align_height":
+                cb_inherit_res.setChecked(False)
+                target_h = ph if ph > 0 else source_vis_h
+                sb_h.setValue(target_h)
+                w = max(1, int(round(target_h * source_aspect)))
+                sb_w.setValue(w)
             axp = max(1, min(1024, int(preset.get("align_x", 32))))
             ayp = int(preset.get("align_y", 1)) % axp
             arp = str(preset.get("align_round", "ceil") or "ceil")
@@ -5444,6 +5702,10 @@ class MainWindow(QMainWindow):
             if bitrate_mode and cb_bitrate_match_source.isChecked() and sb_bitrate.value() != source_bitrate_kbps:
                 sb_bitrate.setValue(source_bitrate_kbps)
             sb_bitrate.setEnabled(bitrate_mode and not cb_bitrate_match_source.isChecked())
+            if bitrate_mode and cb_bitrate_match_source.isChecked():
+                sb_bitrate.setToolTip(tr("export.options.bitrate_match_source_disabled_tip"))
+            else:
+                sb_bitrate.setToolTip("")
             cb_bitrate_match_source.setEnabled(bitrate_mode)
             sb_quality.setEnabled(mode == "quality")
             _refresh_adjust_ui()
@@ -5490,7 +5752,8 @@ class MainWindow(QMainWindow):
             lambda checked: cb_save_preset.setChecked(False) if checked and cb_save_preset.isChecked() else None
         )
         cb_inherit_res.toggled.connect(
-            lambda _checked: (
+            lambda checked: (
+                current_res_align_mode.__setitem__(0, "inherit" if checked else "align_width"),
                 _apply_prefer_pad_solution(),
                 _refresh_enabled(),
             )
@@ -5504,6 +5767,8 @@ class MainWindow(QMainWindow):
         cb_multiple.toggled.connect(
             lambda checked: (
                 _apply_prefer_pad_solution() if checked else None,
+                btn_min_crop.setEnabled(bool(checked)),
+                btn_min_pad.setEnabled(bool(checked)),
                 _refresh_enabled(),
             )
         )
@@ -5580,6 +5845,8 @@ class MainWindow(QMainWindow):
         cb_export_align_apply.currentIndexChanged.connect(lambda _i: _refresh_export_align_ui_mismatch())
         cb_quick_preset.currentIndexChanged.connect(lambda _i: _on_quick_preset_changed())
         cb_quick_preset.currentIndexChanged.connect(lambda _i: _refresh_save_preset_controls())
+        btn_min_crop.clicked.connect(_apply_min_crop_solution)
+        btn_min_pad.clicked.connect(_apply_prefer_pad_solution)
         btn_copy_cmd.clicked.connect(
             lambda: (
                 QApplication.clipboard().setText(command_only[0]),
@@ -5601,6 +5868,20 @@ class MainWindow(QMainWindow):
         _set_cmd_drawer_visible(False)
         _refresh_save_preset_controls()
         _refresh_export_align_ui_mismatch()
+
+        # Apply default preset's resolution alignment mode on initial open
+        if preset_res_align_mode == "inherit":
+            cb_inherit_res.setChecked(True)
+        elif preset_res_align_mode == "align_width":
+            cb_inherit_res.setChecked(False)
+            target_w = preset_target_width if preset_target_width > 0 else source_vis_w
+            sb_w.setValue(target_w)
+        elif preset_res_align_mode == "align_height":
+            cb_inherit_res.setChecked(False)
+            target_h = preset_target_height if preset_target_height > 0 else source_vis_h
+            sb_h.setValue(target_h)
+        _refresh_preview()
+
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return None
 
@@ -5630,6 +5911,9 @@ class MainWindow(QMainWindow):
                     target_name = str(p.get("name", "") or "").strip() or tr("export.preset.default_name")
                     break
             if target_id:
+                ram_save = current_res_align_mode[0]
+                pw_save = max(0, min(16384, sb_w.value())) if ram_save == "align_width" else 0
+                ph_save = max(0, min(16384, sb_h.value())) if ram_save == "align_height" else 0
                 payload = self._make_export_preset_payload(
                     name=target_name,
                     export_fps=max(1, min(240, int(sb_fps.value()))),
@@ -5642,6 +5926,9 @@ class MainWindow(QMainWindow):
                     export_filename_template=export_filename_template,
                     size_multiple_enabled=cb_multiple.isChecked(),
                     size_multiple_value=sb_multiple.value(),
+                    resolution_align_mode=ram_save,
+                    preset_width=pw_save,
+                    preset_height=ph_save,
                     align_enabled=align_export_enabled,
                     align_x=align_export_x,
                     align_y=align_export_y,
@@ -5652,6 +5939,9 @@ class MainWindow(QMainWindow):
                 self._save_export_preset(payload, set_as_default=False)
         elif cb_save_preset.isChecked():
             preset_name = edit_preset_name.text().strip() or tr("export.preset.default_name")
+            ram_save = current_res_align_mode[0]
+            pw_save = max(0, min(16384, sb_w.value())) if ram_save == "align_width" else 0
+            ph_save = max(0, min(16384, sb_h.value())) if ram_save == "align_height" else 0
             payload = self._make_export_preset_payload(
                 name=preset_name,
                 export_fps=max(1, min(240, int(sb_fps.value()))),
@@ -5664,6 +5954,9 @@ class MainWindow(QMainWindow):
                 export_filename_template=export_filename_template,
                 size_multiple_enabled=cb_multiple.isChecked(),
                 size_multiple_value=sb_multiple.value(),
+                resolution_align_mode=ram_save,
+                preset_width=pw_save,
+                preset_height=ph_save,
                 align_enabled=align_export_enabled,
                 align_x=align_export_x,
                 align_y=align_export_y,
@@ -5764,6 +6057,11 @@ class MainWindow(QMainWindow):
             cancel_flag,
             thread,
             self._export_progress_bridge,
+            subtitle_source_path=(
+                self._data.subtitle_path
+                if self._data.subtitle_enabled and self._data.subtitle_path
+                else None
+            ),
         )
         worker.moveToThread(thread)
         thread.started.connect(worker.run_export)

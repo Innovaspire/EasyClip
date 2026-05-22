@@ -18,6 +18,8 @@ MESSAGES: dict[str, dict[str, str]] = {
     "menu.settings": {"zh_CN": "设置", "en_US": "Settings"},
     "menu.preferences": {"zh_CN": "偏好设置…", "en_US": "Preferences…"},
     "menu.quit": {"zh_CN": "退出", "en_US": "Quit"},
+    "menu.load_subtitle": {"zh_CN": "加载字幕…", "en_US": "Load subtitle…"},
+    "menu.unload_subtitle": {"zh_CN": "卸载字幕", "en_US": "Unload subtitle"},
     "menu.help": {"zh_CN": "帮助", "en_US": "Help"},
     "menu.about": {"zh_CN": "关于", "en_US": "About"},
     "dialog.about_text": {
@@ -302,6 +304,19 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh_CN": "点击切换显示文件名 / 完整路径",
         "en_US": "Click to toggle filename / full path",
     },
+    "subtitle.load_dialog_title": {"zh_CN": "加载字幕", "en_US": "Load subtitle"},
+    "subtitle.parse_error": {
+        "zh_CN": "无法解析字幕文件：{error}",
+        "en_US": "Failed to parse subtitle file: {error}",
+    },
+    "subtitle.status_loaded": {
+        "zh_CN": "字幕：{filename}",
+        "en_US": "Subtitle: {filename}",
+    },
+    "subtitle.status_unloaded": {
+        "zh_CN": "字幕已卸载",
+        "en_US": "Subtitle unloaded",
+    },
     "transport.tip.quick_slice": {
         "zh_CN": "快捷切片 {digit}（向前 {before}，向后 {after}）（快捷键：{digit}）",
         "en_US": "Quick slice {digit} (extend {before}f forward, {after}f back) (Shortcut: {digit})",
@@ -367,6 +382,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh_CN": "请输入预设名称后再保存。",
         "en_US": "Please enter a preset name before saving.",
     },
+    "settings.resolution_align_mode": {"zh_CN": "分辨率预计算", "en_US": "Resolution Pre-calculation"},
+    "settings.resolution_align_mode.inherit": {"zh_CN": "继承分辨率", "en_US": "Inherit resolution"},
+    "settings.resolution_align_mode.align_width": {"zh_CN": "按宽对齐", "en_US": "Align by width"},
+    "settings.resolution_align_mode.align_height": {"zh_CN": "按高对齐", "en_US": "Align by height"},
     "settings.export_preset.duplicate.title": {"zh_CN": "预设名称已存在", "en_US": "Preset name already exists"},
     "settings.export_preset.duplicate.body": {
         "zh_CN": "预设“{name}”已存在。是否覆盖该预设？",
@@ -518,6 +537,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "zh_CN": "与源视频码率一致",
         "en_US": "Match source bitrate",
     },
+    "export.options.bitrate_match_source_disabled_tip": {
+        "zh_CN": "已启用「与源视频码率一致」，此处数值不生效",
+        "en_US": "Match source bitrate is enabled; this value is ignored",
+    },
     "export.options.rate_mode.quality": {"zh_CN": "按量化器（推荐）", "en_US": "Quantizer (recommended)"},
     "export.options.rate_mode.quality_inline": {
         "zh_CN": "量化器（{qname}）",
@@ -563,6 +586,8 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     "export.options.width_label": {"zh_CN": "宽", "en_US": "W"},
     "export.options.height_label": {"zh_CN": "高", "en_US": "H"},
+    "export.options.preset_width": {"zh_CN": "预设宽", "en_US": "Preset W"},
+    "export.options.preset_height": {"zh_CN": "预设高", "en_US": "Preset H"},
     "export.options.inherit_resolution": {"zh_CN": "继承分辨率", "en_US": "Inherit resolution"},
     "export.options.inherit_resolution_value": {
         "zh_CN": "将继承：{width}x{height}",
@@ -575,7 +600,7 @@ MESSAGES: dict[str, dict[str, str]] = {
     "export.options.keep_aspect": {"zh_CN": "保持比例", "en_US": "Keep aspect ratio"},
     "export.options.keep_aspect_on": {"zh_CN": "保持比例（已锁定）", "en_US": "Keep aspect ratio (locked)"},
     "export.options.keep_aspect_off": {"zh_CN": "保持比例（已解锁）", "en_US": "Keep aspect ratio (unlocked)"},
-    "export.options.multiple_enable": {"zh_CN": "长宽限定为", "en_US": "Constrain width/height to"},
+    "export.options.multiple_enable": {"zh_CN": "宽高限定为", "en_US": "Constrain width/height to"},
     "export.options.multiple_suffix": {"zh_CN": "倍数", "en_US": "multiple"},
     "export.options.multiple_tip": {
         "zh_CN": "此处设置的分辨率以上方设置的「内容分辨率」为基准，进行裁切/黑边，不会进行拉伸。",
@@ -588,6 +613,8 @@ MESSAGES: dict[str, dict[str, str]] = {
     },
     "export.options.edge_adjust.mode": {"zh_CN": "处理方式", "en_US": "Method"},
     "export.options.edge_adjust.pad": {"zh_CN": "增加黑边", "en_US": "Add black borders"},
+    "export.options.edge_adjust.min_crop": {"zh_CN": "一键最小裁切", "en_US": "Minimal Crop"},
+    "export.options.edge_adjust.min_pad": {"zh_CN": "一键最小黑边", "en_US": "Minimal Pad"},
     "export.options.edge_adjust.crop": {"zh_CN": "抛弃边缘像素", "en_US": "Crop edge pixels"},
     "export.options.edge_adjust.horizontal": {"zh_CN": "水平", "en_US": "Horizontal"},
     "export.options.edge_adjust.vertical": {"zh_CN": "垂直", "en_US": "Vertical"},

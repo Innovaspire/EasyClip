@@ -155,6 +155,11 @@ class TimelineWidget(QWidget):
     clip_select_requested = Signal(int)
     clip_drag_delta = Signal(int, int)  # clip_idx, delta_frames (may be 0; used for view-edge pan)
     clip_drag_finished = Signal()
+    # Annotation marker signals (frame_index, not list index).
+    # These are independent of clip signals; only one set is active at a time.
+    marker_select_requested = Signal(int)    # frame_index of the selected marker
+    marker_drag_delta = Signal(int, int)     # old_frame_index, new_frame_index
+    marker_drag_finished = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -174,6 +179,14 @@ class TimelineWidget(QWidget):
         self._selected_clip_index: int | None = None
         self._hover_clip_index: int | None = None
         self._hover_frame: int | None = None
+        # Annotation markers
+        self._markers: list[int] = []
+        self._selected_marker_frame: int | None = None
+        self._hover_marker_frame: int | None = None
+        self._rmb_marker_frame: int | None = None
+        self._rmb_marker_orig_frame: int = 0
+        self._rmb_marker_left_bound: int = 0
+        self._rmb_marker_right_bound: int = 0
         self.setMinimumHeight(RULER_H + 36)
         on_theme_changed(self._on_theme_changed)
 
@@ -191,6 +204,8 @@ class TimelineWidget(QWidget):
         view_span: int | None = None,
         fps: float = 30.0,
         selected_clip_index: int | None = None,
+        markers: list[int] | None = None,
+        selected_marker_frame: int | None = None,
     ) -> None:
         self._total = max(1, total_frames)
         self._current = max(0, min(current_frame, self._total - 1))
@@ -205,6 +220,10 @@ class TimelineWidget(QWidget):
             self._selected_clip_index = None
         else:
             self._selected_clip_index = int(selected_clip_index)
+        if markers is not None:
+            self._markers = sorted(markers)
+        if selected_marker_frame is not None:
+            self._selected_marker_frame = selected_marker_frame if selected_marker_frame in self._markers else None
         self.update()
 
     def set_sync_crosshair_frame(self, frame: int | None) -> None:
@@ -256,6 +275,20 @@ class TimelineWidget(QWidget):
                 return idx
         return None
 
+    def _marker_at_x(self, x: float) -> int | None:
+        """Hit-test a marker line at the given x position.
+        Returns the frame_index of the marker, or None if no marker is within range.
+        Hit tolerance is ±5 px from the marker's center line.
+        """
+        if not self._markers:
+            return None
+        hit_tolerance = 5
+        for mf in self._markers:
+            mx = self._x_for_frame(mf)
+            if abs(int(x) - mx) <= hit_tolerance:
+                return mf
+        return None
+
     def _set_hover_clip(self, idx: int | None) -> None:
         if idx == self._hover_clip_index:
             return
@@ -263,10 +296,11 @@ class TimelineWidget(QWidget):
         self.update()
 
     def leaveEvent(self, event) -> None:  # noqa: N802
-        if self._rmb_clip_idx is None:
+        if self._rmb_clip_idx is None and self._rmb_marker_frame is None:
             self.crosshair_hover.emit(None)
             self._set_hover_clip(None)
             self._hover_frame = None
+            self._hover_marker_frame = None
             QToolTip.hideText()
         self.update()
         super().leaveEvent(event)
@@ -274,6 +308,29 @@ class TimelineWidget(QWidget):
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         px = event.position().x()
         py = event.position().y()
+        if self._rmb_marker_frame is not None:
+            new_frame = self._frame_at_x(px)
+            new_frame = max(0, min(self._total - 1, new_frame))
+            # Constrain: don't cross neighboring markers (bounds fixed at drag start)
+            new_frame = max(self._rmb_marker_left_bound,
+                            min(self._rmb_marker_right_bound, new_frame))
+            if new_frame == self._rmb_marker_frame:
+                return
+
+            # Remove previous drag position, add new one (instant visual feedback)
+            if self._rmb_marker_frame in self._markers:
+                self._markers.remove(self._rmb_marker_frame)
+            if new_frame not in self._markers:
+                self._markers.append(new_frame)
+                self._markers.sort()
+            self._rmb_marker_frame = new_frame
+            self._selected_marker_frame = new_frame
+            self.marker_drag_delta.emit(self._rmb_marker_orig_frame, new_frame)
+            self.crosshair_hover.emit(new_frame)
+            self._hover_frame = new_frame
+            self.update()
+            event.accept()
+            return
         if self._rmb_clip_idx is not None:
             dx = px - self._rmb_last_x
             self._rmb_last_x = px
@@ -291,21 +348,59 @@ class TimelineWidget(QWidget):
         self._hover_frame = self._frame_at_x(px)
         hover_idx = self._clip_index_at_pos(px, py)
         self._set_hover_clip(hover_idx)
-        if hover_idx is not None and 0 <= hover_idx < len(self._clips):
-            clip = self._clips[hover_idx]
-            if clip.end_frame is not None:
-                tip = tr("timeline.clip_hover_tooltip", clip_no=hover_idx + 1)
-                QToolTip.showText(event.globalPosition().toPoint(), tip, self)
+        # Check marker hover (only if no clip is hovered)
+        hover_marker = self._marker_at_x(px) if self._markers else None
+        if hover_marker is not None:
+            self._hover_marker_frame = hover_marker
+            # Find sequential number for tooltip
+            seq = self._markers.index(hover_marker) + 1
+            tip = tr("annotation.marker_tooltip", num=seq, frame=hover_marker)
+            QToolTip.showText(event.globalPosition().toPoint(), tip, self)
         else:
-            QToolTip.hideText()
+            if self._hover_marker_frame is not None:
+                self._hover_marker_frame = None
+                self.update()
+            if hover_idx is not None and 0 <= hover_idx < len(self._clips):
+                clip = self._clips[hover_idx]
+                if clip.end_frame is not None:
+                    tip = tr("timeline.clip_hover_tooltip", clip_no=hover_idx + 1)
+                    QToolTip.showText(event.globalPosition().toPoint(), tip, self)
+            else:
+                QToolTip.hideText()
         super().mouseMoveEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
+            # During a marker drag, ignore left-clicks — the grab is active
+            if self._rmb_marker_frame is not None:
+                event.accept()
+                return
             f = self._frame_at_x(event.position().x())
             self.seek_frame.emit(f)
             return
         if event.button() == Qt.MouseButton.RightButton:
+            # Check marker hit first (annotation mode)
+            mf = self._marker_at_x(event.position().x()) if self._markers else None
+            if mf is not None:
+                self.marker_select_requested.emit(mf)
+                self._rmb_marker_frame = mf
+                self._rmb_marker_orig_frame = mf
+                # Compute neighbor bounds at drag start so the dragged marker
+                # cannot cross adjacent markers during the entire drag.
+                sorted_markers = sorted(self._markers)
+                idx = sorted_markers.index(mf)
+                self._rmb_marker_left_bound = (
+                    sorted_markers[idx - 1] + 1 if idx > 0 else 0
+                )
+                self._rmb_marker_right_bound = (
+                    sorted_markers[idx + 1] - 1
+                    if idx < len(sorted_markers) - 1
+                    else self._total - 1
+                )
+                self.grabMouse()
+                event.accept()
+                return
+            # Fall through to clip hit test (slicing mode)
             idx = self._clip_index_at_pos(event.position().x(), event.position().y())
             if idx is not None:
                 self.clip_select_requested.emit(idx)
@@ -318,12 +413,19 @@ class TimelineWidget(QWidget):
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if event.button() == Qt.MouseButton.RightButton and self._rmb_clip_idx is not None:
-            self.releaseMouse()
-            self._rmb_clip_idx = None
-            self.clip_drag_finished.emit()
-            event.accept()
-            return
+        if event.button() == Qt.MouseButton.RightButton:
+            if self._rmb_marker_frame is not None:
+                self.releaseMouse()
+                self._rmb_marker_frame = None
+                self.marker_drag_finished.emit()
+                event.accept()
+                return
+            if self._rmb_clip_idx is not None:
+                self.releaseMouse()
+                self._rmb_clip_idx = None
+                self.clip_drag_finished.emit()
+                event.accept()
+                return
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
@@ -491,6 +593,44 @@ class TimelineWidget(QWidget):
                     painter.setPen(QPen(QColor(235, 242, 255, 225)))
                     painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
                     x += bw + 3
+
+        # ── Annotation markers ──
+        if self._markers:
+            painter.save()
+            try:
+                marker_color = QColor(90, 120, 200, 200)      # blue, like clip blocks
+                marker_color_sel = QColor(100, 140, 230, 230)  # selected
+                marker_color_hover = QColor(75, 105, 190, 220) # hover
+                tri_size = 5  # small triangle at top of marker
+                for mf in self._markers:
+                    mx = self._x_for_frame(mf)
+                    if mx < -10 or mx > w + 10:
+                        continue
+                    is_sel = mf == self._selected_marker_frame
+                    is_hover = mf == self._hover_marker_frame
+                    if is_sel:
+                        col = marker_color_sel
+                        lw = 2
+                    elif is_hover:
+                        col = marker_color_hover
+                        lw = 2
+                    else:
+                        col = marker_color
+                        lw = 1
+                    # Small triangle (▼) at top in ruler area
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(col)
+                    tri_y = RULER_H - 2
+                    painter.drawPolygon([
+                        QPoint(mx, tri_y),
+                        QPoint(mx - tri_size, tri_y - tri_size),
+                        QPoint(mx + tri_size, tri_y - tri_size),
+                    ])
+                    # Vertical line from ruler to bottom
+                    painter.setPen(QPen(col, lw))
+                    painter.drawLine(mx, RULER_H, mx, h)
+            finally:
+                painter.restore()
 
         cx = self._x_for_frame(self._current)
         painter.setPen(QPen(self._wc.playhead_color, 2))

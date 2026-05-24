@@ -6,6 +6,9 @@ from PySide6.QtCore import QSettings
 
 MESSAGES: dict[str, dict[str, str]] = {
     "app.title": {"zh_CN": "EasyClip", "en_US": "EasyClip"},
+    "tab.slicing": {"zh_CN": "视频切片", "en_US": "Video Slicing"},
+    "tab.annotation": {"zh_CN": "Clip 标注", "en_US": "Clip Annotation"},
+    "annotation.coming_soon": {"zh_CN": "Clip 标注功能即将推出…", "en_US": "Clip Annotation coming soon…"},
     "menu.file": {"zh_CN": "文件", "en_US": "File"},
     "menu.open": {"zh_CN": "打开视频…", "en_US": "Open video…"},
     "menu.export": {"zh_CN": "导出全部片段…", "en_US": "Export all clips…"},
@@ -812,6 +815,249 @@ MESSAGES: dict[str, dict[str, str]] = {
     "undo.action.drag_clip": {"zh_CN": "拖拽片段", "en_US": "Drag clip"},
     "undo.action.nudge_boundary": {"zh_CN": "微调边界", "en_US": "Nudge boundary"},
     "settings.undo_max_steps": {"zh_CN": "最大撤销步数", "en_US": "Max Undo Steps"},
+
+    # ── Annotation ──────────────────────────────────────────────────
+    "annotation.menu.file": {"zh_CN": "文件", "en_US": "File"},
+    "annotation.open_folder": {"zh_CN": "打开文件夹…", "en_US": "Open Folder…"},
+    "annotation.save": {"zh_CN": "保存", "en_US": "Save"},
+    "annotation.export": {"zh_CN": "导出标注…", "en_US": "Export Annotations…"},
+    "annotation.clip_list": {"zh_CN": "Clip 列表", "en_US": "Clip List"},
+    "annotation.system_prompt": {"zh_CN": "System Prompt", "en_US": "System Prompt"},
+    "annotation.system_prompt_placeholder": {
+        "zh_CN": "输入项目级别的 LLM system prompt…",
+        "en_US": "Enter project-level LLM system prompt…",
+    },
+    "annotation.error": {"zh_CN": "错误", "en_US": "Error"},
+    "annotation.project_loaded": {
+        "zh_CN": "已加载项目: {name}",
+        "en_US": "Project loaded: {name}",
+    },
+    "annotation.startup.restore_body": {
+        "zh_CN": "是否加载上次的标注项目 [{name}]？",
+        "en_US": "Load the last annotation project [{name}]?",
+    },
+    "annotation.missing_clip_title": {"zh_CN": "Clip 已丢失", "en_US": "Clip Missing"},
+    "annotation.missing_clip_body": {
+        "zh_CN": "上次选中的 clip [{path}] 已不存在，可能是被外部删除。",
+        "en_US": "The previously selected clip [{path}] no longer exists. It may have been deleted externally.",
+    },
+    "annotation.saved": {"zh_CN": "已保存", "en_US": "Saved"},
+    "annotation.exported": {"zh_CN": "已导出到: {path}", "en_US": "Exported to: {path}"},
+    "annotation.video_not_found": {
+        "zh_CN": "视频文件未找到: {path}",
+        "en_US": "Video file not found: {path}",
+    },
+    "annotation.no_clip_selected": {
+        "zh_CN": "没有选中的 clip",
+        "en_US": "No clip selected",
+    },
+    "annotation.no_preset": {
+        "zh_CN": "没有 LLM 预设配置",
+        "en_US": "No LLM preset configured",
+    },
+    "annotation.llm_done": {
+        "zh_CN": "LLM 标注完成",
+        "en_US": "LLM annotation completed",
+    },
+    "annotation.llm_error": {
+        "zh_CN": "LLM 调用出错: {error}",
+        "en_US": "LLM call error: {error}",
+    },
+    "annotation.llm_waiting": {"zh_CN": "等待回复中", "en_US": "Waiting for reply"},
+    "annotation.llm_error_title": {"zh_CN": "LLM 调用失败", "en_US": "LLM Call Failed"},
+
+    # Annotation editor
+    "annotation.prompt_label": {"zh_CN": "提示词 (Prompt)", "en_US": "Prompt"},
+    "annotation.prompt_placeholder": {
+        "zh_CN": "最终文生视频提示词…",
+        "en_US": "Final text-to-video prompt…",
+    },
+    "annotation.draft_label": {"zh_CN": "草稿 (Draft)", "en_US": "Draft"},
+    "annotation.draft_placeholder": {
+        "zh_CN": "手动标注草稿，或由 LLM 润色…",
+        "en_US": "Manual draft, or refined by LLM…",
+    },
+
+    # Draft editor (dynamic per-frame + transition)
+    "annotation.draft.global_context": {"zh_CN": "全局描述", "en_US": "Global Context"},
+    "annotation.draft.global_context_optional": {"zh_CN": "全局描述（可选）", "en_US": "Global Context (Optional)"},
+    "annotation.draft.global_context_placeholder": {
+        "zh_CN": "可选的 clip 级别全局描述，留空则不会发送给 LLM…",
+        "en_US": "Optional clip-level context, skipped in LLM prompt if empty…",
+    },
+    "annotation.draft.frame_label": {"zh_CN": "Frame {frame} ({sec:.1f}s)", "en_US": "Frame {frame} ({sec:.1f}s)"},
+    "annotation.draft.frame_placeholder": {
+        "zh_CN": "描述这一帧的画面内容…",
+        "en_US": "Describe what is happening at this frame…",
+    },
+    "annotation.draft.transition_label": {
+        "zh_CN": "→ Transition {f0} → {f1} ({s0:.1f}s → {s1:.1f}s)",
+        "en_US": "→ Transition {f0} → {f1} ({s0:.1f}s → {s1:.1f}s)",
+    },
+    "annotation.draft.transition_placeholder": {
+        "zh_CN": "描述从当前帧到下一帧之间的变化…",
+        "en_US": "Describe what happens between this frame and the next…",
+    },
+
+    # Manual annotation frame selector
+    "annotation.frames_label": {"zh_CN": "手动标注帧", "en_US": "Manual Annotation Frames"},
+    "annotation.add_frame": {"zh_CN": "添加当前帧为手动标注帧", "en_US": "Add Current Frame as Annotation"},
+    "annotation.remove_frame": {"zh_CN": "删除选中手动标注帧", "en_US": "Remove Selected Annotation Frame"},
+    "annotation.add_frame_btn_tip": {
+        "zh_CN": "添加当前帧为手动标注帧 (M)",
+        "en_US": "Add current frame as manual annotation frame (M)",
+    },
+    "annotation.annotation_num": {
+        "zh_CN": "标注帧 #{num}",
+        "en_US": "Annotation #{num}",
+    },
+    "annotation.marker_tooltip": {
+        "zh_CN": "手动标注帧 #{num} (帧{frame})",
+        "en_US": "Manual Annotation #{num} (frame {frame})",
+    },
+    "annotation.frame_item": {
+        "zh_CN": "帧{frame} ({sec}s)",
+        "en_US": "Frame {frame} ({sec}s)",
+    },
+    "annotation.duplicate_frame": {
+        "zh_CN": "帧 {frame} 已存在手动标注帧",
+        "en_US": "Frame {frame} already has an annotation",
+    },
+
+    # Annotation nudge
+    "annotation.btn.nudge_left": {"zh_CN": "◁（A）", "en_US": "◁ (A)"},
+    "annotation.btn.nudge_right": {"zh_CN": "▷（D）", "en_US": "▷ (D)"},
+    "annotation.tip.nudge_left": {
+        "zh_CN": "将选中手动标注帧向左移动 1 帧 (A)",
+        "en_US": "Nudge selected annotation frame left by 1 frame (A)",
+    },
+    "annotation.tip.nudge_right": {
+        "zh_CN": "将选中手动标注帧向右移动 1 帧 (D)",
+        "en_US": "Nudge selected annotation frame right by 1 frame (D)",
+    },
+    "annotation.tip.nudge_disabled": {
+        "zh_CN": "请先选中一个手动标注帧",
+        "en_US": "Select a manual annotation frame first",
+    },
+
+    # LLM panel
+    "annotation.llm_preset": {"zh_CN": "LLM 预设", "en_US": "LLM Preset"},
+    "annotation.manage_presets": {"zh_CN": "管理预设…", "en_US": "Manage Presets…"},
+    "annotation.generate": {"zh_CN": "生成标注", "en_US": "Generate"},
+    "annotation.preview_draft": {"zh_CN": "预览草稿", "en_US": "Preview Draft"},
+    "annotation.preview_draft_empty": {
+        "zh_CN": "（草稿为空，请先在 Draft 区域填写内容或添加手动标注帧）",
+        "en_US": "(Draft is empty. Add content in the Draft area or add annotation frames first.)"
+    },
+
+    # LLM preset management (shared between preferences tab and gear-button dialog)
+    "settings.tab.llm_presets": {"zh_CN": "LLM API预设", "en_US": "LLM API Presets"},
+    "settings.llm_preset": {"zh_CN": "LLM API预设", "en_US": "LLM API Preset"},
+    "settings.llm_preset.new": {"zh_CN": "新预设", "en_US": "New preset"},
+    "settings.llm_preset.save": {"zh_CN": "保存预设", "en_US": "Save preset"},
+    "settings.llm_preset.saved": {"zh_CN": "已保存", "en_US": "Saved"},
+    "settings.llm_preset.name_placeholder": {"zh_CN": "请输入预设名称", "en_US": "Enter preset name"},
+    "settings.llm_preset.name_required.title": {"zh_CN": "预设名称不能为空", "en_US": "Preset name required"},
+    "settings.llm_preset.name_required.body": {
+        "zh_CN": "请输入预设名称。",
+        "en_US": "Please enter a preset name.",
+    },
+    "settings.llm_preset.duplicate.title": {"zh_CN": "预设名称已存在", "en_US": "Preset name already exists"},
+    "settings.llm_preset.duplicate.body": {
+        "zh_CN": "预设「{name}」已存在。是否覆盖该预设？",
+        "en_US": "Preset \"{name}\" already exists. Overwrite it?",
+    },
+    "settings.llm_preset.unsaved.title": {"zh_CN": "预设未保存", "en_US": "Preset not saved"},
+    "settings.llm_preset.unsaved.body": {
+        "zh_CN": "当前预设修改尚未保存，是否先保存？",
+        "en_US": "Current preset changes are not saved. Save before closing?",
+    },
+    "annotation.preset_name": {"zh_CN": "名称", "en_US": "Name"},
+    "annotation.preset_url": {"zh_CN": "Base URL", "en_US": "Base URL"},
+    "annotation.preset_key": {"zh_CN": "API Key", "en_US": "API Key"},
+    "annotation.preset_model": {"zh_CN": "模型", "en_US": "Model"},
+    "annotation.preset_format": {"zh_CN": "API 格式", "en_US": "API Format"},
+    "annotation.preset_format_openai": {"zh_CN": "OpenAI", "en_US": "OpenAI"},
+    "annotation.preset_fetch_models": {"zh_CN": "获取模型", "en_US": "Fetch"},
+    "annotation.preset_fetch_models_tip": {
+        "zh_CN": "从服务器获取可用模型列表",
+        "en_US": "Fetch available model list from server",
+    },
+    "annotation.preset_fetch_error_title": {
+        "zh_CN": "获取模型列表失败",
+        "en_US": "Failed to fetch model list",
+    },
+    "annotation.preset_fetch_error_body": {
+        "zh_CN": "服务器返回错误：\n\n{error}",
+        "en_US": "Server returned an error:\n\n{error}",
+    },
+    "annotation.preset_fill_base_url": {
+        "zh_CN": "请先填写 Base URL 并选择 API 格式",
+        "en_US": "Please fill in Base URL and select API Format first",
+    },
+    "annotation.preset_fetching": {"zh_CN": "获取中", "en_US": "Fetching"},
+    "annotation.preset_streaming": {"zh_CN": "流式传输", "en_US": "Streaming"},
+    "annotation.preset_thinking": {"zh_CN": "思考模式", "en_US": "Thinking Mode"},
+    "annotation.preset_is_omni": {"zh_CN": "Omni 模型 (支持音视频)", "en_US": "Omni Model (audio/video)"},
+    "annotation.preset_omni_media_format": {"zh_CN": "音视频格式", "en_US": "Media Format"},
+    "annotation.preset_omni_media_qwen": {"zh_CN": "Qwen Omni", "en_US": "Qwen Omni"},
+
+    # Quick-access toggles above prompt editor
+    "annotation.quick.streaming": {"zh_CN": "流式", "en_US": "Stream"},
+    "annotation.quick.streaming_tip": {
+        "zh_CN": "启用流式传输，实时显示生成内容",
+        "en_US": "Enable streaming to see content as it is generated",
+    },
+    "annotation.quick.thinking": {"zh_CN": "思考", "en_US": "Think"},
+    "annotation.quick.thinking_tip": {
+        "zh_CN": "启用思考模式，模型会输出推理过程",
+        "en_US": "Enable thinking mode to show model reasoning",
+    },
+    "annotation.quick.omni": {"zh_CN": "Omni", "en_US": "Omni"},
+    "annotation.quick.omni_tip": {
+        "zh_CN": "启用 Omni 模式，发送完整视频文件（含音频）而非帧截图",
+        "en_US": "Enable Omni mode to send full video (with audio) instead of frame screenshots",
+    },
+
+    # Omni video transcode toggles
+    "annotation.omni.reduce_resolution": {"zh_CN": "限制分辨率", "en_US": "Limit Resolution"},
+    "annotation.omni.reduce_resolution_tip": {
+        "zh_CN": "将视频分辨率限制在 480p 以内（高于此值则缩放，低于则保持原样）",
+        "en_US": "Clamp video resolution to 480p max (scale down if taller, leave untouched if already below)",
+    },
+    "annotation.omni.reduce_bitrate": {"zh_CN": "限制码率", "en_US": "Limit Bitrate"},
+    "annotation.omni.reduce_bitrate_tip": {
+        "zh_CN": "将视频码率限制在 1.5 Mbps 以内（高于此值则重新编码，低于则保持原样）",
+        "en_US": "Cap video bitrate at 1.5 Mbps (re-encode if above, leave untouched if already below)",
+    },
+
+    # External modification dialog
+    "annotation.external_change_title": {"zh_CN": "检测到外部修改", "en_US": "External Change Detected"},
+    "annotation.external_change_body": {
+        "zh_CN": "{filename} 已被外部程序修改。",
+        "en_US": "{filename} has been modified externally.",
+    },
+    "annotation.external_change_info": {
+        "zh_CN": "加载外部版本会将当前版本暂存为一次撤销操作。",
+        "en_US": "Loading the external version will save the current version as an undo step.",
+    },
+    "annotation.external_change_load": {"zh_CN": "加载外部版本", "en_US": "Load External Version"},
+    "annotation.external_change_keep": {"zh_CN": "保留软件版本", "en_US": "Keep Software Version"},
+    "annotation.external_loaded": {"zh_CN": "已加载外部版本。Ctrl+Z 可撤销。", "en_US": "External version loaded. Ctrl+Z to undo."},
+
+    # Inline version navigation
+    "annotation.version.prev_tip": {"zh_CN": "上一个版本", "en_US": "Previous version"},
+    "annotation.version.next_tip": {"zh_CN": "下一个版本", "en_US": "Next version"},
+    "annotation.version.label_tip": {
+        "zh_CN": "当前版本 / 总版本数",
+        "en_US": "Current version / total versions",
+    },
+    "annotation.version.delete_tip": {"zh_CN": "删除当前版本", "en_US": "Delete current version"},
+    "annotation.version.deleted": {"zh_CN": "版本已删除", "en_US": "Version deleted"},
+    "annotation.version.cant_delete_last": {
+        "zh_CN": "无法删除最后一个版本",
+        "en_US": "Cannot delete the last version",
+    },
 }
 
 

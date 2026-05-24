@@ -126,6 +126,12 @@ class AppSettings:
                 value = StartupBehavior.ASK.value
         self._s.setValue("startup_behavior", value)
 
+    def last_active_tab_index(self) -> int:
+        return int(self._s.value("last_active_tab_index", 0))
+
+    def set_last_active_tab_index(self, index: int) -> None:
+        self._s.setValue("last_active_tab_index", max(0, index))
+
     def last_export_dir(self) -> str:
         return str(self._s.value("last_export_dir", "") or "")
 

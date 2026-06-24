@@ -96,13 +96,12 @@ class _LLMCallWorker(QThread):
     def __init__(
         self,
         preset: LLMPreset,
-        system_prompt: str,
-        content: list[dict],
+        messages: list[dict],
     ) -> None:
         super().__init__()
         self._preset = preset
-        self._system_prompt = system_prompt
-        self._content = content
+        self._messages = messages
+        self._reasoning_text = ""
 
     def run(self) -> None:
         try:
@@ -111,6 +110,9 @@ class _LLMCallWorker(QThread):
             else:
                 text = self._call_api()
                 self.result.emit(text)
+                if self._reasoning_text:
+                    self.chunk.emit("", self._reasoning_text)
+                    self.stream_done.emit()
         except Exception as e:
             self.error.emit(str(e))
 
@@ -130,11 +132,8 @@ class _LLMCallWorker(QThread):
             raise NotImplementedError(f"Streaming not implemented for format: {fmt}")
 
     def _build_messages(self) -> list[dict]:
-        messages: list[dict] = []
-        if self._system_prompt:
-            messages.append({"role": "system", "content": self._system_prompt})
-        messages.append({"role": "user", "content": self._content})
-        return messages
+        """Return the pre-built messages array (multi-turn conversation)."""
+        return list(self._messages)
 
     def _call_openai_compatible(self) -> str:
         """Call an OpenAI-compatible chat completions endpoint (non-streaming)."""
@@ -153,7 +152,9 @@ class _LLMCallWorker(QThread):
             req.add_header("Authorization", f"Bearer {self._preset.api_key}")
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            return data["choices"][0]["message"]["content"]
+            msg = data["choices"][0]["message"]
+            self._reasoning_text = msg.get("reasoning_content", "")
+            return msg.get("content", "")
 
     def _call_openai_streaming(self) -> None:
         """Call OpenAI-compatible endpoint with SSE streaming."""
@@ -209,9 +210,6 @@ class _LLMCallWorker(QThread):
 class LLMPanel(QWidget):
     """LLM generate button (preset selector is in the left panel)."""
 
-    generate_requested = Signal()
-    preview_draft_requested = Signal()
-
     # Forwarded from worker for streaming
     chunk_received = Signal(str, str)   # (content_delta, reasoning_delta)
     stream_finished = Signal()
@@ -238,19 +236,10 @@ class LLMPanel(QWidget):
         layout.addWidget(self._chk_reduce_bitrate)
         layout.addSpacing(4)
 
-        self._btn_preview = QPushButton(tr("annotation.preview_draft"))
-        self._btn_preview.setEnabled(False)
-        self._btn_preview.clicked.connect(self.preview_draft_requested.emit)
-        layout.addWidget(self._btn_preview)
-
-        self._btn_generate = QPushButton(tr("annotation.generate"))
-        self._btn_generate.setEnabled(False)
-        layout.addWidget(self._btn_generate)
         layout.addSpacing(8)
 
         if self._preset_combo is not None:
             self._preset_combo.currentIndexChanged.connect(self._on_preset_selected)
-        self._btn_generate.clicked.connect(self.generate_requested.emit)
 
         self._refresh_presets()
 
@@ -259,12 +248,11 @@ class LLMPanel(QWidget):
 
     def call_llm(
         self,
-        system_prompt: str,
-        content: list[dict],
+        messages: list[dict],
         on_result: callable,
         on_error: callable,
     ) -> None:
-        """Call the LLM with a pre-built content array.
+        """Call the LLM with a pre-built messages array (multi-turn conversation).
 
         In streaming mode, ``chunk_received`` and ``stream_finished`` signals
         are emitted during the response; callers should connect to those instead
@@ -272,8 +260,7 @@ class LLMPanel(QWidget):
         mode or for backward compatibility).
 
         Args:
-            system_prompt: Project-level system prompt.
-            content: OpenAI-compatible content array (interleaved images + text).
+            messages: Full OpenAI-format messages array (system + all turns).
             on_result: Callback receiving the full response text (non-streaming only).
             on_error: Callback receiving an error message string.
         """
@@ -286,7 +273,7 @@ class LLMPanel(QWidget):
 
         self._enter_loading_state()
 
-        self._worker = _LLMCallWorker(preset, system_prompt, content)
+        self._worker = _LLMCallWorker(preset, messages)
 
         if is_streaming:
             self._worker.chunk.connect(self.chunk_received.emit)
@@ -300,10 +287,6 @@ class LLMPanel(QWidget):
         """Disable UI and start elapsed timer."""
         import time as _time
         self._elapsed_start = _time.monotonic()
-        base = tr("annotation.llm_waiting")
-        self._btn_generate.setText(base)
-        self._btn_generate.setEnabled(False)
-        self._btn_preview.setEnabled(False)
         if self._preset_combo is not None:
             self._preset_combo.setEnabled(False)
         # Start elapsed timer (0.1 s interval)
@@ -312,10 +295,8 @@ class LLMPanel(QWidget):
         self._elapsed_timer.start(100)
 
     def _update_elapsed_label(self) -> None:
-        import time as _time
-        elapsed = _time.monotonic() - self._elapsed_start
-        base = tr("annotation.llm_waiting")
-        self._btn_generate.setText(f"{base} ({elapsed:.1f}s)")
+        """Placeholder — UI state is managed by ChatView during LLM calls."""
+        pass
 
     def _stop_elapsed_timer(self) -> None:
         if self._elapsed_timer is not None:
@@ -325,9 +306,6 @@ class LLMPanel(QWidget):
     def _restore_ui_state(self) -> None:
         """Restore button and combo states after LLM call completes."""
         self._stop_elapsed_timer()
-        self._btn_generate.setText(tr("annotation.generate"))
-        self._btn_generate.setEnabled(True)
-        self._btn_preview.setEnabled(True)
         if self._preset_combo is not None:
             self._preset_combo.setEnabled(True)
 
@@ -422,8 +400,6 @@ class LLMPanel(QWidget):
                     self._preset_combo.setCurrentIndex(i)
             self._preset_combo.blockSignals(False)
             ok = len(presets) > 0
-        self._btn_generate.setEnabled(ok)
-        self._btn_preview.setEnabled(ok)
         self._sync_omni_checkboxes()
 
     def teardown(self) -> None:
@@ -443,8 +419,6 @@ class LLMPanel(QWidget):
         self._restore_ui_state()
 
     def refresh_language(self) -> None:
-        self._btn_generate.setText(tr("annotation.generate"))
-        self._btn_preview.setText(tr("annotation.preview_draft"))
         self._chk_reduce_resolution.setText(tr("annotation.omni.reduce_resolution"))
         self._chk_reduce_resolution.setToolTip(tr("annotation.omni.reduce_resolution_tip"))
         self._chk_reduce_bitrate.setText(tr("annotation.omni.reduce_bitrate"))

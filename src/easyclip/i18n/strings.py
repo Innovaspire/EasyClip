@@ -866,37 +866,89 @@ MESSAGES: dict[str, dict[str, str]] = {
     "annotation.llm_waiting": {"zh_CN": "等待回复中", "en_US": "Waiting for reply"},
     "annotation.llm_error_title": {"zh_CN": "LLM 调用失败", "en_US": "LLM Call Failed"},
 
-    # Annotation editor
-    "annotation.prompt_label": {"zh_CN": "提示词 (Prompt)", "en_US": "Prompt"},
-    "annotation.prompt_placeholder": {
-        "zh_CN": "最终文生视频提示词…",
-        "en_US": "Final text-to-video prompt…",
+    # ── Chat bubble UI ────────────────────────────────────────────
+    "annotation.chat.input_placeholder": {
+        "zh_CN": "输入消息，Enter 发送，Shift+Enter 换行",
+        "en_US": "Type a message, Enter to send, Shift+Enter for new line",
     },
-    "annotation.draft_label": {"zh_CN": "草稿 (Draft)", "en_US": "Draft"},
-    "annotation.draft_placeholder": {
-        "zh_CN": "手动标注草稿，或由 LLM 润色…",
-        "en_US": "Manual draft, or refined by LLM…",
+    "annotation.chat.send": {"zh_CN": "发送", "en_US": "Send"},
+    "annotation.chat.frame_picker_tip": {
+        "zh_CN": "引用标注帧到聊天输入 (Ctrl+Shift+F)",
+        "en_US": "Insert frame reference into chat (Ctrl+Shift+F)",
+    },
+    "annotation.chat.add_manual_tip": {
+        "zh_CN": "添加手动标注",
+        "en_US": "Add manual annotation",
+    },
+    "annotation.add_manual_title": {
+        "zh_CN": "添加手动标注",
+        "en_US": "Add Manual Annotation",
+    },
+    "annotation.add_manual_prompt": {
+        "zh_CN": "输入你的标注内容，它将作为对话上下文的一部分：",
+        "en_US": "Enter your annotation. It will be included as conversation context:",
+    },
+    "annotation.add_manual_placeholder": {
+        "zh_CN": "在此粘贴或编写你的标注...",
+        "en_US": "Paste or write your annotation here...",
+    },
+    "annotation.chat.empty_hint": {
+        "zh_CN": "点击「+」按钮或按 M 键添加关键帧截图\nLLM 将看到这些帧来理解视频内容\n也可以直接输入文本发送",
+        "en_US": "Click [+] or press M to add keyframe screenshots\nThe LLM will see these frames for visual context\nOr type a message to start text-only conversation",
+    },
+    "annotation.chat.no_frames_hint": {
+        "zh_CN": "（未添加标注帧，LLM 仅能看到字幕）",
+        "en_US": "(No annotation frames added; LLM sees subtitles only)",
+    },
+    "annotation.cannot_delete_committed": {
+        "zh_CN": "第 {frame} 帧已在对话中发送，无法删除",
+        "en_US": "Frame {frame} was sent in a conversation message and cannot be deleted",
+    },
+    "annotation.thumbnail_empty": {
+        "zh_CN": "暂无标注帧，按 M 键或点击 + 按钮添加",
+        "en_US": "No annotation frames. Press M or click + to add frames.",
+    },
+    "annotation.chat.attachment_images": {
+        "zh_CN": "[附 {n} 张帧截图]",
+        "en_US": "[{n} frame images attached]",
+    },
+    "annotation.chat.attachment_video": {"zh_CN": "[附视频片段]", "en_US": "[Video clip attached]"},
+
+    # ── Collapsible thinking ───────────────────────────────────────
+    "annotation.chat.thinking_label": {"zh_CN": "思考中…", "en_US": "Thinking…"},
+    "annotation.chat.thinking_done": {
+        "zh_CN": "已深度思考 (用时 {time:.1f}s)",
+        "en_US": "Deep thought ({time:.1f}s)",
+    },
+    "annotation.chat.thinking_expand": {"zh_CN": "展开推理过程", "en_US": "Expand reasoning"},
+    "annotation.chat.thinking_collapse": {"zh_CN": "收起推理过程", "en_US": "Collapse reasoning"},
+
+    # ── System prompt display ──────────────────────────────────────
+    "annotation.chat.system_header": {"zh_CN": "System Prompt", "en_US": "System Prompt"},
+
+    # ── Tree branching ─────────────────────────────────────────────
+    "annotation.chat.branch_label": {
+        "zh_CN": "分支 {current}/{total}",
+        "en_US": "Branch {current}/{total}",
+    },
+    "annotation.chat.branch_prev_tip": {"zh_CN": "上一个分支", "en_US": "Previous branch"},
+    "annotation.chat.branch_next_tip": {"zh_CN": "下一个分支", "en_US": "Next branch"},
+    "annotation.chat.regenerate": {"zh_CN": "重新生成", "en_US": "Regenerate"},
+    "annotation.chat.regenerate_tip": {"zh_CN": "基于上文重新生成回复", "en_US": "Regenerate response from this point"},
+    "annotation.chat.regenerate_confirm_title": {"zh_CN": "确认重新生成", "en_US": "Confirm Regeneration"},
+    "annotation.chat.annotation_edit_tip": {"zh_CN": "编辑标注内容", "en_US": "Edit annotation"},
+    "annotation.chat.annotation_select_tip": {"zh_CN": "选中此标注写入文件", "en_US": "Select this annotation as output"},
+    "annotation.chat.annotation_selected": {"zh_CN": "已选中", "en_US": "Selected"},
+    "annotation.chat.regenerate_confirm_body": {
+        "zh_CN": "将从该位置重新生成回复，当前回复将被保留为另一个分支。是否继续？",
+        "en_US": "A new response will be generated from this point. The current response will be preserved as a separate branch. Continue?",
     },
 
-    # Draft editor (dynamic per-frame + transition)
-    "annotation.draft.global_context": {"zh_CN": "全局描述", "en_US": "Global Context"},
-    "annotation.draft.global_context_optional": {"zh_CN": "全局描述（可选）", "en_US": "Global Context (Optional)"},
-    "annotation.draft.global_context_placeholder": {
-        "zh_CN": "可选的 clip 级别全局描述，留空则不会发送给 LLM…",
-        "en_US": "Optional clip-level context, skipped in LLM prompt if empty…",
-    },
-    "annotation.draft.frame_label": {"zh_CN": "Frame {frame} ({sec:.1f}s)", "en_US": "Frame {frame} ({sec:.1f}s)"},
-    "annotation.draft.frame_placeholder": {
-        "zh_CN": "描述这一帧的画面内容…",
-        "en_US": "Describe what is happening at this frame…",
-    },
-    "annotation.draft.transition_label": {
-        "zh_CN": "→ Transition {f0} → {f1} ({s0:.1f}s → {s1:.1f}s)",
-        "en_US": "→ Transition {f0} → {f1} ({s0:.1f}s → {s1:.1f}s)",
-    },
-    "annotation.draft.transition_placeholder": {
-        "zh_CN": "描述从当前帧到下一帧之间的变化…",
-        "en_US": "Describe what happens between this frame and the next…",
+    # ── Clear conversation ─────────────────────────────────────────
+    "annotation.chat.clear_title": {"zh_CN": "清除对话", "en_US": "Clear Conversation"},
+    "annotation.chat.clear_confirm": {
+        "zh_CN": "确定要清除所有对话记录吗？已生成的标注会保留。",
+        "en_US": "Clear all conversation history? Generated annotations will be preserved.",
     },
 
     # Manual annotation frame selector
@@ -943,13 +995,6 @@ MESSAGES: dict[str, dict[str, str]] = {
     # LLM panel
     "annotation.llm_preset": {"zh_CN": "LLM 预设", "en_US": "LLM Preset"},
     "annotation.manage_presets": {"zh_CN": "管理预设…", "en_US": "Manage Presets…"},
-    "annotation.generate": {"zh_CN": "生成标注", "en_US": "Generate"},
-    "annotation.preview_draft": {"zh_CN": "预览草稿", "en_US": "Preview Draft"},
-    "annotation.preview_draft_empty": {
-        "zh_CN": "（草稿为空，请先在 Draft 区域填写内容或添加手动标注帧）",
-        "en_US": "(Draft is empty. Add content in the Draft area or add annotation frames first.)"
-    },
-
     # LLM preset management (shared between preferences tab and gear-button dialog)
     "settings.tab.llm_presets": {"zh_CN": "LLM API预设", "en_US": "LLM API Presets"},
     "settings.llm_preset": {"zh_CN": "LLM API预设", "en_US": "LLM API Preset"},
@@ -1045,19 +1090,6 @@ MESSAGES: dict[str, dict[str, str]] = {
     "annotation.external_change_keep": {"zh_CN": "保留软件版本", "en_US": "Keep Software Version"},
     "annotation.external_loaded": {"zh_CN": "已加载外部版本。Ctrl+Z 可撤销。", "en_US": "External version loaded. Ctrl+Z to undo."},
 
-    # Inline version navigation
-    "annotation.version.prev_tip": {"zh_CN": "上一个版本", "en_US": "Previous version"},
-    "annotation.version.next_tip": {"zh_CN": "下一个版本", "en_US": "Next version"},
-    "annotation.version.label_tip": {
-        "zh_CN": "当前版本 / 总版本数",
-        "en_US": "Current version / total versions",
-    },
-    "annotation.version.delete_tip": {"zh_CN": "删除当前版本", "en_US": "Delete current version"},
-    "annotation.version.deleted": {"zh_CN": "版本已删除", "en_US": "Version deleted"},
-    "annotation.version.cant_delete_last": {
-        "zh_CN": "无法删除最后一个版本",
-        "en_US": "Cannot delete the last version",
-    },
 }
 
 

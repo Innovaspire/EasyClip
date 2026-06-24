@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMenuBar,
@@ -42,9 +43,10 @@ from PySide6.QtWidgets import (
 
 from easyclip.annotation.project import AnnotationProject, AnnotatedClip, FrameAnnotation
 from easyclip.annotation.settings import AnnotationSettings, OMNI_MEDIA_FORMAT_QWEN
-from easyclip.annotation.widgets.annotation_editor import AnnotationEditor
+from easyclip.annotation.widgets.chat_view import ChatView
 from easyclip.annotation.widgets.llm_panel import LLMPanel
-from easyclip.core.ffmpeg_util import probe_video, find_ffmpeg
+from easyclip.annotation.widgets.thumbnail_strip import ThumbnailStrip
+from easyclip.core.ffmpeg_util import probe_video, find_ffmpeg, extract_frame_png
 from easyclip.core.settings import AppSettings
 from easyclip.core.timebase import Timebase
 from easyclip.core.subtitle import SubtitleTrack, find_matching_subtitle, parse_subtitle_file
@@ -171,6 +173,9 @@ class AnnotationPage(QWidget):
         self._ffmpeg: str | None = None
         self._ffprobe: str | None = None
 
+        # Chat view (replaces old prompt_edit + conversation system)
+        self._chat_view: ChatView | None = None
+
         # Undo/redo stacks live on AnnotatedClip (persisted to annotations.json)
         self._max_undo_steps: int = 50
 
@@ -238,7 +243,8 @@ class AnnotationPage(QWidget):
 
         self._clip_list = QListWidget(top_widget)
         self._clip_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        top_layout.addWidget(QLabel(tr("annotation.clip_list")), 0)
+        self._clip_list_title = QLabel(tr("annotation.clip_list"))
+        top_layout.addWidget(self._clip_list_title, 0)
         top_layout.addWidget(self._clip_list, 1)
 
         self._left_splitter.addWidget(top_widget)
@@ -289,76 +295,35 @@ class AnnotationPage(QWidget):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(4, 4, 4, 4)
 
-        # Video preview + side prompt panel (horizontal splitter)
+        # Video preview + chat panel (horizontal splitter)
         self._player = QMediaPlayer(self)
         self._audio: QAudioOutput | None = None      # created lazily in on_tab_activated()
         self._video_sink = QVideoSink(self)
         self._player.setVideoSink(self._video_sink)
 
-        self._video_prompt_split = QSplitter(Qt.Orientation.Horizontal, right)
+        self._video_chat_split = QSplitter(Qt.Orientation.Horizontal, right)
 
         # Left: video preview
-        self._video_preview = VideoPreviewWidget(self._player, self._video_prompt_split)
-        self._video_prompt_split.addWidget(self._video_preview)
+        self._video_preview = VideoPreviewWidget(self._player, self._video_chat_split)
+        self._video_chat_split.addWidget(self._video_preview)
 
-        # Right: prompt panel
-        prompt_panel = QWidget(self._video_prompt_split)
-        prompt_layout = QVBoxLayout(prompt_panel)
-        prompt_layout.setContentsMargins(4, 0, 0, 0)
+        # Right: chat view
+        self._chat_view = ChatView(self._video_chat_split)
+        self._video_chat_split.addWidget(self._chat_view)
+        self._video_chat_split.setSizes([600, 350])
+        self._video_chat_split.setStretchFactor(0, 3)
+        self._video_chat_split.setStretchFactor(1, 1)
+        self._video_chat_split.setCollapsible(0, False)
+        self._video_chat_split.setCollapsible(1, False)
 
-        # Prompt label + version navigation row
-        prompt_header = QWidget(prompt_panel)
-        prompt_header_lay = QHBoxLayout(prompt_header)
-        prompt_header_lay.setContentsMargins(0, 0, 0, 0)
-        prompt_header_lay.addWidget(QLabel(tr("annotation.prompt_label")))
-        prompt_header_lay.addStretch()
-
-        self._btn_version_prev = QPushButton("←")
-        self._btn_version_prev.setFixedWidth(28)
-        self._btn_version_prev.setToolTip(tr("annotation.version.prev_tip"))
-        self._btn_version_prev.setEnabled(False)
-        prompt_header_lay.addWidget(self._btn_version_prev)
-
-        self._lbl_version = QLabel("—")
-        self._lbl_version.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._lbl_version.setFixedWidth(40)
-        prompt_header_lay.addWidget(self._lbl_version)
-
-        self._btn_version_next = QPushButton("→")
-        self._btn_version_next.setFixedWidth(28)
-        self._btn_version_next.setToolTip(tr("annotation.version.next_tip"))
-        self._btn_version_next.setEnabled(False)
-        prompt_header_lay.addWidget(self._btn_version_next)
-
-        self._btn_version_delete = QPushButton("🗑")
-        self._btn_version_delete.setFixedWidth(28)
-        self._btn_version_delete.setToolTip(tr("annotation.version.delete_tip"))
-        self._btn_version_delete.setEnabled(False)
-        prompt_header_lay.addWidget(self._btn_version_delete)
-        prompt_layout.addWidget(prompt_header)
-
-        # Prompt text edit
-        self._prompt_edit = QPlainTextEdit()
-        self._prompt_edit.setPlaceholderText(tr("annotation.prompt_placeholder"))
-        prompt_layout.addWidget(self._prompt_edit, 1)
-
-        self._video_prompt_split.addWidget(prompt_panel)
-        self._video_prompt_split.setSizes([600, 250])
-        self._video_prompt_split.setStretchFactor(0, 3)
-        self._video_prompt_split.setStretchFactor(1, 1)
-        self._video_prompt_split.setCollapsible(0, False)
-        self._video_prompt_split.setCollapsible(1, False)
-
-        # Annotation editor + LLM button (splitter bottom section)
+        # LLM panel (splitter bottom section)
         bottom = QWidget(right)
         bottom_layout = QVBoxLayout(bottom)
         bottom_layout.setContentsMargins(0, 4, 0, 0)
 
-        self._annotation_editor = AnnotationEditor(bottom)
-        bottom_layout.addWidget(self._annotation_editor, 1)
-
         self._llm_panel = LLMPanel(self._settings, self._preset_combo, bottom)
         bottom_layout.addWidget(self._llm_panel, 0)
+        bottom_layout.addStretch(1)
 
         # Transport row (below timeline): [volume --right]  [< ▶ > --centered]
         transport_row = QHBoxLayout()
@@ -403,15 +368,15 @@ class AnnotationPage(QWidget):
         self._vol_slider.setMaximumWidth(120)
         transport_row.addWidget(self._vol_slider)
 
-        # Three-section vertical splitter: video+prompt | timeline+transport | bottom
-        # Handle A (video+prompt ↔ timeline+transport): resize video area.
-        # Handle B (timeline+transport ↔ annotation editor): resize editor area.
+        # Three-section vertical splitter: video+chat | timeline+transport | bottom
+        # Handle A (video+chat ↔ timeline+transport): resize video area.
+        # Handle B (timeline+transport ↔ LLM panel): resize panel area.
         # Timeline+transport group is locked at fixed height (min==max) so it
         # never stretches when either handle is dragged.
         self._main_split = QSplitter(Qt.Orientation.Vertical, right)
 
-        # Top: video + prompt (side-by-side)
-        self._main_split.addWidget(self._video_prompt_split)
+        # Top: video + chat (side-by-side)
+        self._main_split.addWidget(self._video_chat_split)
 
         # Middle: timeline + transport row (grouped, fixed height)
         tt_group = QWidget(self._main_split)
@@ -422,16 +387,23 @@ class AnnotationPage(QWidget):
         self._timeline.setMinimumHeight(48)
         self._timeline.setMaximumHeight(48)
         tt_layout.addWidget(self._timeline)
+
+        # Thumbnail strip between timeline and transport
+        self._thumbnail_strip = ThumbnailStrip(tt_group)
+        self._thumbnail_strip.setMinimumHeight(70)
+        self._thumbnail_strip.setMaximumHeight(70)
+        tt_layout.addWidget(self._thumbnail_strip)
+
         tt_layout.addLayout(transport_row)
-        TT_GROUP_HEIGHT = 82  # 48 (timeline) + 34 (transport buttons + padding)
+        TT_GROUP_HEIGHT = 152  # 48 (timeline) + 70 (thumbnails) + 34 (transport)
         tt_group.setMinimumHeight(TT_GROUP_HEIGHT)
         tt_group.setMaximumHeight(TT_GROUP_HEIGHT)
         self._main_split.addWidget(tt_group)
 
-        # Bottom: annotation editor + LLM
+        # Bottom: LLM panel
         self._main_split.addWidget(bottom)
 
-        self._main_split.setSizes([400, TT_GROUP_HEIGHT, 300])
+        self._main_split.setSizes([400, 152, 300])
         self._main_split.setStretchFactor(0, 3)
         self._main_split.setStretchFactor(1, 0)
         self._main_split.setStretchFactor(2, 1)
@@ -457,7 +429,7 @@ class AnnotationPage(QWidget):
             ("h_main", self._h_splitter),
             ("v_left", self._left_splitter),
             ("v_right", self._main_split),
-            ("h_video_prompt", self._video_prompt_split),
+            ("h_video_chat", self._video_chat_split),
         ]:
             self._settings.save_splitter_state(name, splitter.saveState().data())
 
@@ -467,7 +439,7 @@ class AnnotationPage(QWidget):
             ("h_main", self._h_splitter),
             ("v_left", self._left_splitter),
             ("v_right", self._main_split),
-            ("h_video_prompt", self._video_prompt_split),
+            ("h_video_chat", self._video_chat_split),
         ]:
             state = self._settings.restore_splitter_state(name)
             if state is not None:
@@ -500,12 +472,11 @@ class AnnotationPage(QWidget):
         self._settings.save_llm_preset(preset, set_as_default=False)
         # Keep the LLMPanel's omni checkboxes in sync
         self._llm_panel._sync_omni_checkboxes()
+        # Update context handles in chat input (video/subtitles)
+        self._update_context_handles()
 
     def _connect_signals(self) -> None:
         self._btn_open_folder.clicked.connect(self._open_project_folder)
-        self._btn_version_prev.clicked.connect(lambda: self._go_to_version(-1))
-        self._btn_version_next.clicked.connect(lambda: self._go_to_version(1))
-        self._btn_version_delete.clicked.connect(self._delete_current_version)
         self._clip_list.currentRowChanged.connect(self._on_clip_selected)
         self._video_sink.videoFrameChanged.connect(self._video_preview.set_video_frame)
         self._player.positionChanged.connect(self._on_player_position)
@@ -517,16 +488,28 @@ class AnnotationPage(QWidget):
         self._timeline.marker_drag_delta.connect(self._on_marker_drag_delta)
         self._timeline.marker_drag_finished.connect(self._on_marker_drag_finished)
         self._system_prompt_edit.textChanged.connect(self._on_system_prompt_changed)
-        self._prompt_edit.textChanged.connect(self._on_prompt_text_changed)
-        self._annotation_editor.frame_removed.connect(self._on_frame_removed)
-        self._annotation_editor.frame_selected.connect(self._on_frame_selected)
-        self._llm_panel.generate_requested.connect(self._on_llm_generate)
-        self._llm_panel.preview_draft_requested.connect(self._on_preview_draft)
         self._btn_manage_presets.clicked.connect(self._show_llm_preset_manager)
+
+        # Chat view signals
+        self._chat_view.message_sent.connect(self._on_chat_send)
+        self._chat_view.regenerate_requested.connect(self._on_regenerate_requested)
+        self._chat_view.branch_navigated.connect(self._on_branch_navigated)
+        self._chat_view.frame_reference_clicked.connect(self._on_frame_ref_clicked)
+        self._chat_view.frame_ref_insert_requested.connect(self._on_frame_ref_insert)
+        self._chat_view.add_manual_annotation_requested.connect(self._on_add_manual_annotation)
+        self._chat_view.annotation_edit_requested.connect(self._on_annotation_edit)
+        self._chat_view.annotation_select_toggled.connect(self._on_annotation_select_toggled)
+        self._chat_view.user_message_edit_requested.connect(self._on_user_message_edit)
+        self._chat_view.raw_output_requested.connect(self._on_show_raw_output)
+
+        # Thumbnail strip signals
+        self._thumbnail_strip.thumbnail_clicked.connect(self._on_thumbnail_clicked)
+        self._thumbnail_strip.thumbnail_double_clicked.connect(self._on_thumbnail_double_clicked)
+        self._thumbnail_strip.thumbnail_delete_requested.connect(self._on_thumbnail_delete)
 
         # Quick-access toggles: sync preset <-> checkboxes
         self._preset_combo.currentIndexChanged.connect(
-            lambda _i: self._sync_quick_toggles_from_preset()
+            lambda _i: (self._sync_quick_toggles_from_preset(), self._update_context_handles())
         )
         self._qck_streaming.toggled.connect(lambda _v: self._on_quick_toggle_changed())
         self._qck_thinking.toggled.connect(lambda _v: self._on_quick_toggle_changed())
@@ -603,6 +586,7 @@ class AnnotationPage(QWidget):
         _bind(Qt.Key.Key_Backspace, self._delete_selected_annotation)
         _bind(Qt.Key.Key_A, lambda: self._nudge_if_no_text_focus(-1))
         _bind(Qt.Key.Key_D, lambda: self._nudge_if_no_text_focus(1))
+        _bind(QKeySequence("Ctrl+Shift+F"), self._insert_frame_ref)
 
     def uninstall_shortcuts(self) -> None:
         for sc in self._shortcuts:
@@ -631,11 +615,11 @@ class AnnotationPage(QWidget):
             return False
 
         key = event.key()
-        if key == Qt.Key.Key_Left:
+        if key == Qt.Key.Key_Left and not self._is_text_input_focused():
             self._step_frame(-1)
             event.accept()
             return True
-        if key == Qt.Key.Key_Right:
+        if key == Qt.Key.Key_Right and not self._is_text_input_focused():
             self._step_frame(1)
             event.accept()
             return True
@@ -685,6 +669,83 @@ class AnnotationPage(QWidget):
         if not self._is_text_input_focused():
             self._nudge_selected_annotation(delta)
 
+    # ── frame reference handle ────────────────────────────────────
+
+    def _on_frame_ref_clicked(self, frame_index: int, timestamp_sec: float) -> None:
+        """Seek player to the clicked frame reference."""
+        if self._tb is None:
+            return
+        self._current_frame = frame_index
+        self._player.setPosition(int(frame_index / self._tb.fps * 1000))
+        # Highlight the marker on timeline
+        sorted_anns = sorted(
+            self._active_clip.annotations, key=lambda a: a.frame_index
+        ) if self._active_clip else []
+        for i, a in enumerate(sorted_anns):
+            if a.frame_index == frame_index:
+                self._selected_annotation_index = i
+                break
+        self._update_timeline_markers()
+
+    def _on_frame_ref_insert(self, frame_index: int, timestamp_sec: float) -> None:
+        """Insert [Frame N (Ts)] into the chat input field."""
+        if self._chat_view is not None:
+            self._chat_view.insert_frame_ref_at_cursor(frame_index, timestamp_sec)
+
+    def _insert_frame_ref(self) -> None:
+        """Insert [Frame N (Ts)] for the currently selected annotation frame."""
+        if self._active_clip is None or self._selected_annotation_index < 0:
+            return
+        sorted_anns = sorted(self._active_clip.annotations, key=lambda a: a.frame_index)
+        if self._selected_annotation_index < len(sorted_anns):
+            fa = sorted_anns[self._selected_annotation_index]
+            self._on_frame_ref_insert(fa.frame_index, fa.timestamp_sec)
+
+    # ── thumbnail strip handlers ──────────────────────────────────
+
+    def _on_thumbnail_clicked(self, frame_index: int, timestamp_sec: float) -> None:
+        """Single-click on thumbnail: seek video to frame and select it."""
+        if self._tb is None or self._active_clip is None:
+            return
+        self._current_frame = frame_index
+        self._player.setPosition(int(frame_index / self._tb.fps * 1000))
+        sorted_anns = sorted(self._active_clip.annotations, key=lambda a: a.frame_index)
+        for i, a in enumerate(sorted_anns):
+            if a.frame_index == frame_index:
+                self._selected_annotation_index = i
+                break
+        self._update_timeline_markers()
+        self._thumbnail_strip.set_selected(frame_index)
+
+    def _on_thumbnail_double_clicked(self, frame_index: int, timestamp_sec: float) -> None:
+        """Double-click on thumbnail: insert frame reference into chat input."""
+        self._on_frame_ref_insert(frame_index, timestamp_sec)
+
+    def _on_thumbnail_delete(self, frame_index: int) -> None:
+        """Delete a pending (uncommitted) annotation frame from the thumbnail strip."""
+        if self._active_clip is None:
+            return
+        # Find the annotation
+        target = None
+        for a in self._active_clip.annotations:
+            if a.frame_index == frame_index:
+                target = a
+                break
+        if target is None:
+            return
+        if target.committed:
+            self.status_message.emit(
+                tr("annotation.cannot_delete_committed", frame=frame_index)
+            )
+            return
+        self._push_undo()
+        self._delete_frame_image(target.image_path)
+        self._active_clip.annotations.remove(target)
+        self._selected_annotation_index = -1
+        self._update_timeline_markers()
+        self._refresh_annotation_nudge_controls()
+        self._save_project()
+
     def on_tab_deactivated(self) -> None:
         self._save_splitter_layout()
         self._llm_panel.teardown()
@@ -700,7 +761,6 @@ class AnnotationPage(QWidget):
         self._save_splitter_layout()
         self._llm_panel.teardown()
         self._player.stop()
-        self._annotation_editor.cleanup()
         _app = QApplication.instance()
         if _app is not None:
             _app.removeEventFilter(self)
@@ -719,14 +779,13 @@ class AnnotationPage(QWidget):
         self._btn_annot_nudge_left.setText(tr("annotation.btn.nudge_left"))
         self._btn_annot_nudge_right.setText(tr("annotation.btn.nudge_right"))
         self._refresh_annotation_nudge_controls()
-        self._prompt_edit.setPlaceholderText(tr("annotation.prompt_placeholder"))
-        self._annotation_editor.refresh_language()
         self._preset_label.setText(tr("annotation.llm_preset"))
         self._btn_manage_presets.setToolTip(tr("annotation.manage_presets"))
         self._qck_streaming.setText(tr("annotation.quick.streaming"))
         self._qck_thinking.setText(tr("annotation.quick.thinking"))
         self._qck_omni.setText(tr("annotation.quick.omni"))
         self._llm_panel.refresh_language()
+        self._chat_view.refresh_language()
         self._refresh_clip_list_labels()
 
     # ── undo / redo ───────────────────────────────────────────────
@@ -749,10 +808,8 @@ class AnnotationPage(QWidget):
         if self._active_clip is None:
             return
         clip = self._active_clip
-        clip._sync_prompt_to_version()
         snap = {
             "prompt": clip.prompt,
-            "draft_prompt": clip.draft_prompt,
             "state": clip.state,
             "annotations": [a.to_dict() for a in clip.annotations],
         }
@@ -767,27 +824,20 @@ class AnnotationPage(QWidget):
         if not self._active_clip or not self._active_clip.undo_history:
             return
         clip = self._active_clip
-        clip._sync_prompt_to_version()
         snap = {
-            "prompt": clip.prompt, "draft_prompt": clip.draft_prompt,
+            "prompt": clip.prompt,
             "state": clip.state,
             "annotations": [a.to_dict() for a in clip.annotations],
         }
         snap.update(clip._make_version_snapshot())
         clip.redo_history.append(snap)
         prev = clip.undo_history.pop()
-        # Restore version state (handles navigation and deletions)
-        if "versions" in prev:
-            clip._restore_version_snapshot(prev)
-        else:
-            # Backward compat: old snapshots without version data
-            clip.prompt = prev["prompt"]
-        clip.draft_prompt = prev.get("draft_prompt", clip.draft_prompt)
+        # Restore tree state from snapshot
+        clip._restore_version_snapshot(prev)
         clip.state = prev.get("state", clip.state)
         if "annotations" in prev:
             clip.annotations = [FrameAnnotation.from_dict(a) for a in prev["annotations"]]
         self._refresh_editor_from_clip()
-        self._refresh_version_ui()
         self._refresh_undo_state()
         self._save_project()
 
@@ -795,25 +845,19 @@ class AnnotationPage(QWidget):
         if not self._active_clip or not self._active_clip.redo_history:
             return
         clip = self._active_clip
-        clip._sync_prompt_to_version()
         snap = {
-            "prompt": clip.prompt, "draft_prompt": clip.draft_prompt,
+            "prompt": clip.prompt,
             "state": clip.state,
             "annotations": [a.to_dict() for a in clip.annotations],
         }
         snap.update(clip._make_version_snapshot())
         clip.undo_history.append(snap)
         nxt = clip.redo_history.pop()
-        if "versions" in nxt:
-            clip._restore_version_snapshot(nxt)
-        else:
-            clip.prompt = nxt["prompt"]
-        clip.draft_prompt = nxt.get("draft_prompt", clip.draft_prompt)
+        clip._restore_version_snapshot(nxt)
         clip.state = nxt.get("state", clip.state)
         if "annotations" in nxt:
             clip.annotations = [FrameAnnotation.from_dict(a) for a in nxt["annotations"]]
         self._refresh_editor_from_clip()
-        self._refresh_version_ui()
         self._refresh_undo_state()
         self._save_project()
 
@@ -849,6 +893,7 @@ class AnnotationPage(QWidget):
 
     def _update_timeline_markers(self) -> None:
         """Sync timeline markers with current annotations (without full set_state)."""
+        self._sync_annotation_frames_to_chat()
         if self._tb is None:
             return
         self._timeline.set_state(
@@ -863,6 +908,32 @@ class AnnotationPage(QWidget):
             selected_marker_frame=self._get_selected_marker_frame(),
         )
 
+    def _extract_frame_image(self, frame_index: int, timestamp_sec: float) -> str:
+        """Extract a PNG screenshot for *frame_index* and return its relative path.
+        Returns empty string if extraction fails (no project, no ffmpeg, etc.).
+        """
+        if self._project is None or self._active_clip is None:
+            return ""
+        self._ensure_ffmpeg()
+        if self._ffmpeg is None:
+            return ""
+        video_path = self._project.resolve_clip_path(self._active_clip)
+        frames_dir = Path(self._project.project_dir) / "_easyclip_frames"
+        frames_dir.mkdir(exist_ok=True)
+        png_bytes = extract_frame_png(str(video_path), timestamp_sec, self._ffmpeg)
+        stem = video_path.stem
+        png_filename = f"{stem}_frame_{frame_index:06d}.png"
+        (frames_dir / png_filename).write_bytes(png_bytes)
+        return f"_easyclip_frames/{png_filename}"
+
+    def _delete_frame_image(self, image_path: str) -> None:
+        """Delete the PNG file for an annotation frame, if it exists."""
+        if not image_path or self._project is None:
+            return
+        png = Path(self._project.project_dir) / image_path
+        if png.is_file():
+            png.unlink()
+
     def _add_current_frame_as_annotation(self) -> None:
         """Add the current playback frame as a manual annotation frame (M key / + button)."""
         if self._active_clip is None or self._tb is None:
@@ -875,15 +946,14 @@ class AnnotationPage(QWidget):
             return
         self._push_undo()
         ts = frame / self._tb.fps
-        fa = FrameAnnotation(frame_index=frame, timestamp_sec=ts)
+        image_path = self._extract_frame_image(frame, ts)
+        fa = FrameAnnotation(frame_index=frame, timestamp_sec=ts, image_path=image_path)
         self._active_clip.annotations.append(fa)
         self._active_clip.annotations.sort(key=lambda a: a.frame_index)
         # Select the newly added annotation (list already sorted in-place above)
         self._selected_annotation_index = next(
             (i for i, a in enumerate(self._active_clip.annotations) if a.frame_index == frame), -1
         )
-        self._annotation_editor.set_annotations(self._active_clip.annotations)
-        self._annotation_editor.select_annotation_by_frame(frame)
         self._update_timeline_markers()
         self._refresh_annotation_nudge_controls()
         self._save_project()
@@ -903,14 +973,20 @@ class AnnotationPage(QWidget):
             return
         self._push_undo()
         target = sorted_anns[idx]
+        # Refuse deletion of committed (sent) frames
+        if target.committed:
+            self.status_message.emit(
+                tr("annotation.cannot_delete_committed", frame=target.frame_index)
+            )
+            return
+        # Delete the PNG file
+        self._delete_frame_image(target.image_path)
         # Remove from clip's annotation list
         for i, a in enumerate(self._active_clip.annotations):
             if a.frame_index == target.frame_index:
                 self._active_clip.annotations.pop(i)
                 break
         self._selected_annotation_index = -1
-        self._annotation_editor.select_annotation_by_frame(None)
-        self._annotation_editor.set_annotations(self._active_clip.annotations)
         self._update_timeline_markers()
         self._refresh_annotation_nudge_controls()
         self._save_project()
@@ -943,16 +1019,17 @@ class AnnotationPage(QWidget):
                 self.status_message.emit(tr("annotation.duplicate_frame", frame=new_frame))
                 return
         self._push_undo()
+        # Delete old PNG and re-extract at new position
+        self._delete_frame_image(ann.image_path)
         ann.frame_index = new_frame
         ann.timestamp_sec = new_frame / self._tb.fps
+        ann.image_path = self._extract_frame_image(new_frame, ann.timestamp_sec)
         self._active_clip.annotations.sort(key=lambda a: a.frame_index)
         # Update selection index (list already sorted in-place above)
         for i, a in enumerate(self._active_clip.annotations):
             if a is ann:
                 self._selected_annotation_index = i
                 break
-        self._annotation_editor.set_annotations(self._active_clip.annotations)
-        self._annotation_editor.select_annotation_by_frame(new_frame)
         self._update_timeline_markers()
         self._refresh_annotation_nudge_controls()
         self._save_project()
@@ -984,12 +1061,10 @@ class AnnotationPage(QWidget):
                 # Save pre-drag snapshot for undo (pushed on drag finish if moved)
                 self._drag_start_snapshot = {
                     "prompt": self._active_clip.prompt,
-                    "draft_prompt": self._active_clip.draft_prompt,
                     "state": self._active_clip.state,
                     "annotations": [ann.to_dict() for ann in self._active_clip.annotations],
                 }
                 self._drag_start_frame = frame_index
-                self._annotation_editor.select_annotation_by_frame(frame_index)
                 self._update_timeline_markers()
                 self._refresh_annotation_nudge_controls()
                 return
@@ -1034,27 +1109,37 @@ class AnnotationPage(QWidget):
 
     def _on_marker_drag_finished(self) -> None:
         """Right-drag finished on a timeline marker — full UI refresh."""
+        dragged = self._dragged_annotation
         self._dragged_annotation = None
         if self._active_clip is not None:
             # Push undo if the frame actually moved
             start_snap = getattr(self, '_drag_start_snapshot', None)
             start_frame = getattr(self, '_drag_start_frame', -1)
-            if start_snap is not None and start_frame != self._get_selected_marker_frame():
+            moved = start_snap is not None and start_frame != self._get_selected_marker_frame()
+            if moved:
                 clip = self._active_clip
                 clip.undo_history.append(start_snap)
                 clip.redo_history.clear()
                 if len(clip.undo_history) > self._max_undo_steps:
                     clip.undo_history.pop(0)
                 self._refresh_undo_state()
+                # Re-extract PNG at new position for the dragged frame
+                if dragged is not None and self._tb is not None:
+                    old_path = start_snap.get("annotations", [])
+                    for a_dict in old_path:
+                        if a_dict.get("frame_index") == start_frame:
+                            self._delete_frame_image(a_dict.get("image_path", ""))
+                            break
+                    dragged.image_path = self._extract_frame_image(
+                        dragged.frame_index, dragged.timestamp_sec
+                    )
             self._drag_start_snapshot = None
             self._drag_start_frame = -1
             # Refresh thumbnails: the frame_index changed so old cache
             # entries are stale; set_annotations rebuilds the strip and
             # triggers re-extraction for new frame positions.
-            self._annotation_editor.set_annotations(self._active_clip.annotations)
             if self._selected_annotation_index >= 0:
                 sf = self._get_selected_marker_frame()
-                self._annotation_editor.select_annotation_by_frame(sf)
             self._update_timeline_markers()
             self._save_project()
 
@@ -1124,15 +1209,33 @@ class AnnotationPage(QWidget):
             return
         # Sync current clip state
         if self._active_clip is not None:
-            self._active_clip.prompt = self._prompt_edit.toPlainText()
-            self._active_clip.draft_prompt = self._annotation_editor.draft_text()
             self._write_clip_prompt_txt(self._active_clip)
         # Also write .txt for every clip that has a prompt (batch sync)
         for clip in self._project.clips:
             if clip is not self._active_clip and clip.prompt.strip():
                 self._write_clip_prompt_txt(clip)
+        self._cleanup_orphaned_frames()
         self._project.save()
         self.status_message.emit(tr("annotation.saved"))
+
+    def _cleanup_orphaned_frames(self) -> None:
+        """Remove frame PNGs in _easyclip_frames/ not referenced by any annotation."""
+        if self._project is None:
+            return
+        frames_dir = Path(self._project.project_dir) / "_easyclip_frames"
+        if not frames_dir.is_dir():
+            return
+        # Collect all referenced image paths
+        referenced: set[str] = set()
+        for clip in self._project.clips:
+            for fa in clip.annotations:
+                if fa.image_path:
+                    referenced.add(fa.image_path)
+        # Remove unreferenced PNGs
+        for png in list(frames_dir.iterdir()):
+            rel = f"_easyclip_frames/{png.name}"
+            if rel not in referenced and png.is_file():
+                png.unlink()
 
     def _export_annotations(self) -> None:
         self._save_project()
@@ -1149,7 +1252,10 @@ class AnnotationPage(QWidget):
     def _refresh_clip_list(self) -> None:
         self._clip_list.clear()
         if self._project is None:
+            self._clip_list_title.setText(tr("annotation.clip_list"))
             return
+        count = len(self._project.clips)
+        self._clip_list_title.setText(f"{tr('annotation.clip_list')} ({count})")
         for clip in self._project.clips:
             item = QListWidgetItem(clip.clip_path)
             item.setData(Qt.ItemDataRole.UserRole, clip.clip_path)
@@ -1168,7 +1274,6 @@ class AnnotationPage(QWidget):
         self._load_clip_preview(clip)
         self._refresh_editor_from_clip()
         self._refresh_undo_state()
-        self._refresh_version_ui()
         self._settings.set_last_selected_clip_path(clip.clip_path)
         self.window_title_changed.emit(
             f"EasyClip - {self._project.project_name} / {clip.clip_path}"
@@ -1176,8 +1281,6 @@ class AnnotationPage(QWidget):
 
     def _save_clip_state(self) -> None:
         if self._active_clip is not None:
-            self._active_clip.prompt = self._prompt_edit.toPlainText()
-            self._annotation_editor.sync_to_clip(self._active_clip)
             self._write_clip_prompt_txt(self._active_clip)
 
     def _clip_prompt_txt_path(self, clip: AnnotatedClip) -> Path:
@@ -1241,108 +1344,7 @@ class AnnotationPage(QWidget):
             # Keep software version, overwrite .txt
             self._write_clip_prompt_txt(clip)
 
-    # ── version snapshots ───────────────────────────────────────────
-
-    # ── version navigation (LLM chat-style) ─────────────────────────
-
-    def _go_to_version(self, delta: int) -> None:
-        """Navigate ``delta`` steps in the version history (-1 = prev, +1 = next)."""
-        clip = self._active_clip
-        if clip is None or clip.version_count == 0:
-            return
-        new_idx = clip.current_version + delta
-        if not (0 <= new_idx < clip.version_count):
-            return
-        # Save current editor state into the current version
-        clip.prompt = self._prompt_edit.toPlainText()
-        clip._sync_prompt_to_version()
-        # Push undo so navigation itself IS undoable (returns to this version)
-        self._push_undo()
-        clip.current_version = new_idx
-        clip._sync_version_to_prompt()
-        self._refresh_editor_from_clip()
-        self._refresh_version_ui()
-        self._save_project()
-
-    def _on_prompt_text_changed(self) -> None:
-        """Auto-create version 1 when the user first types into an empty prompt."""
-        self._ensure_first_version()
-
-    def _ensure_first_version(self) -> None:
-        """Create the first version from the current prompt if none exist."""
-        clip = self._active_clip
-        if clip is None or clip.version_count > 0:
-            return
-        if not self._prompt_edit.toPlainText().strip():
-            return  # empty prompt — don't create a version yet
-        from datetime import datetime, timezone
-        clip.prompt = self._prompt_edit.toPlainText()
-        clip.versions.append({
-            "prompt": clip.prompt,
-            "source": "manual",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
-        clip.current_version = 0
-        clip._sync_version_to_prompt()
-        self._refresh_version_ui()
-        self._save_project()
-
-    def _delete_current_version(self) -> None:
-        """Move current version to deleted_versions (undoable)."""
-        clip = self._active_clip
-        if clip is None or clip.version_count < 1:
-            self.status_message.emit(tr("annotation.version.cant_delete_last"))
-            return
-        if clip.version_count == 1:
-            # Last version: just clear it instead of deleting
-            self.status_message.emit(tr("annotation.version.cant_delete_last"))
-            return
-        self._push_undo()
-        removed = clip.versions.pop(clip.current_version)
-        clip.deleted_versions.append(removed)
-        # Switch to adjacent version
-        if clip.current_version >= clip.version_count:
-            clip.current_version = clip.version_count - 1
-        clip._sync_version_to_prompt()
-        self._refresh_editor_from_clip()
-        self._refresh_version_ui()
-        self._save_project()
-        self.status_message.emit(tr("annotation.version.deleted"))
-
-    def _append_llm_version(self, text: str) -> None:
-        """Append a new LLM-generated version and switch to it."""
-        clip = self._active_clip
-        if clip is None:
-            return
-        from datetime import datetime, timezone
-        clip._sync_prompt_to_version()
-        clip.versions.append({
-            "prompt": text,
-            "source": "llm",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
-        clip.current_version = clip.version_count - 1
-        clip._sync_version_to_prompt()
-        clip.state = "completed"
-        self._refresh_version_ui()
-        self._save_project()
-
-    def _refresh_version_ui(self) -> None:
-        """Update version label and button enabled states."""
-        clip = self._active_clip
-        if clip is None:
-            self._lbl_version.setText("—")
-            self._btn_version_prev.setEnabled(False)
-            self._btn_version_next.setEnabled(False)
-            self._btn_version_delete.setEnabled(False)
-            return
-        self._lbl_version.setText(clip.version_label)
-        has_versions = clip.version_count > 0
-        self._btn_version_prev.setEnabled(has_versions and clip.current_version > 0)
-        self._btn_version_next.setEnabled(has_versions and clip.current_version < clip.version_count - 1)
-        self._btn_version_delete.setEnabled(has_versions and clip.version_count > 0)
-
-    # ── clip preview ──────────────────────────────────────────────
+    # ── clip preview / load ──────────────────────────────────────────
 
     def _load_clip_preview(self, clip: AnnotatedClip) -> None:
         if self._project is None:
@@ -1380,12 +1382,14 @@ class AnnotationPage(QWidget):
         )
 
         # Set video source for thumbnail extraction in frame selector
-        self._annotation_editor.set_video_source(str(video_path.resolve()))
 
         self._btn_add_annotation.setEnabled(True)
 
         # Detect external .txt modifications (like VS Code's "file changed on disk").
         self._check_external_txt_modification(clip)
+
+        # Rebuild annotations from the conversation tree path
+        clip.rebuild_annotations_from_path()
 
         # Auto-load subtitle
         self._subtitle_track = None
@@ -1411,12 +1415,10 @@ class AnnotationPage(QWidget):
             markers=[], selected_marker_frame=None,
         )
         self._video_preview.set_subtitle_track(None)
-        self._annotation_editor.clear()
         self._btn_add_annotation.setEnabled(False)
-        self._lbl_version.setText("—")
-        self._btn_version_prev.setEnabled(False)
-        self._btn_version_next.setEnabled(False)
-        self._btn_version_delete.setEnabled(False)
+        self._chat_view.clear()
+        self._chat_view.set_input_enabled(False)
+        self._thumbnail_strip.clear()
 
     def _ensure_ffmpeg(self) -> None:
         if self._ffmpeg is None:
@@ -1427,13 +1429,44 @@ class AnnotationPage(QWidget):
     def _refresh_editor_from_clip(self) -> None:
         if self._active_clip is None:
             return
-        self._prompt_edit.setPlainText(self._active_clip.prompt)
-        self._annotation_editor.sync_from_clip(self._active_clip)
         self._selected_annotation_index = -1
-        self._annotation_editor.select_annotation_by_frame(None)
         self._refresh_annotation_nudge_controls()
-        if self._tb is not None:
-            self._update_timeline_markers()
+        self._chat_view.load_clip(
+            self._active_clip,
+            self._project.system_prompt if self._project else "",
+        )
+        self._sync_annotation_frames_to_chat()
+        self._update_context_handles()
+        self._chat_view.set_input_enabled(True)
+
+    def _update_context_handles(self) -> None:
+        """Set chat input context handles based on current mode and subtitle state."""
+        handles: list[str] = []
+        preset = self._llm_panel.active_preset()
+        if preset is not None and preset.is_omni_model:
+            handles.append("[Video Clip]")
+        if self._subtitle_track is not None and self._subtitle_track.entries:
+            handles.append("[Subtitles]")
+        if self._chat_view is not None:
+            self._chat_view.set_context_handles(handles)
+
+    def _sync_annotation_frames_to_chat(self) -> None:
+        """Push current annotation frame list to the chat view frame picker and thumbnail strip."""
+        if self._chat_view is None or self._active_clip is None:
+            return
+        frames = [
+            {"frame_index": fa.frame_index, "timestamp_sec": fa.timestamp_sec}
+            for fa in sorted(self._active_clip.annotations, key=lambda a: a.frame_index)
+        ]
+        self._chat_view.set_annotation_frames(frames)
+        # Also refresh the thumbnail strip
+        sel = self._get_selected_marker_frame()
+        proj_dir = self._project.project_dir if self._project else ""
+        self._thumbnail_strip.set_annotations(
+            sorted(self._active_clip.annotations, key=lambda a: a.frame_index),
+            proj_dir,
+            sel,
+        )
 
     # ── startup restore ────────────────────────────────────────────
 
@@ -2158,9 +2191,7 @@ class AnnotationPage(QWidget):
                     self._active_clip.annotations.pop(i)
                     break
         self._selected_annotation_index = -1
-        self._annotation_editor.select_annotation_by_frame(None)
         self._refresh_annotation_nudge_controls()
-        self._annotation_editor.set_annotations(self._active_clip.annotations)
         self._update_timeline_markers()
 
     def _on_frame_selected(self, frame_index: int) -> None:
@@ -2177,9 +2208,289 @@ class AnnotationPage(QWidget):
             self._current_frame = frame_index
             self._player.setPosition(int(frame_index / self._tb.fps * 1000))
 
-    def _on_llm_generate(self) -> None:
+    def _on_llm_error(self, error: str) -> None:
+        self.status_message.emit(tr("annotation.llm_error", error=error))
+
+    # ── Tree-based conversation (replaces old flat conversation) ────
+
+    def _on_user_message_edit(self, node_id: str) -> None:
+        """Open dialog to edit a user message, creating a new sibling branch."""
+        clip = self._active_clip
+        if clip is None or node_id not in clip.tree_nodes:
+            return
+        node = clip.tree_nodes[node_id]
+        if node.role != "user":
+            return
+        is_root = (node.parent_id is None)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Edit Message")
+        dlg.resize(500, 300)
+        lay = QVBoxLayout(dlg)
+        edit = QPlainTextEdit(dlg)
+        edit.setPlainText(node.content)
+        lay.addWidget(edit)
+        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        btn_box.accepted.connect(dlg.accept)
+        btn_box.rejected.connect(dlg.reject)
+        lay.addWidget(btn_box)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_text = edit.toPlainText().strip()
+        # Root messages have handles (frames/video), so empty text is allowed
+        if not new_text and not is_root:
+            return
+
+        self._push_undo()
+
+        import uuid
+        from datetime import datetime, timezone
+        from easyclip.annotation.project import ConversationNode
+
+        # Build content_parts for root (first message needs frames)
+        content_parts = node.content_parts
+        if is_root:
+            preset = self._llm_panel.active_preset()
+            if preset is not None and self._project is not None:
+                is_omni = preset.is_omni_model
+                clip_video_path = str(self._project.resolve_clip_path(clip))
+                frame_content = build_llm_content(
+                    clip.annotations, self._subtitle_track,
+                    include_images=not is_omni,
+                    project_dir=self._project.project_dir,
+                    omni_mode=is_omni, clip_video_path=clip_video_path,
+                    omni_media_format=preset.omni_media_format,
+                )
+                if new_text:
+                    frame_content.append({"type": "text", "text": new_text})
+                content_parts = frame_content
+
+        # Create sibling user node
+        new_user = ConversationNode(
+            id=str(uuid.uuid4()), role="user", content=new_text,
+            content_parts=content_parts,
+            parent_id=node.parent_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            annotation_snapshot=clip.commit_annotations_snapshot(),
+        )
+        parent_id = node.parent_id
+        if parent_id is not None:
+            clip.add_child_node(parent_id, new_user)
+        else:
+            # Root-level sibling: keep original root, add new root alongside
+            clip.tree_nodes[new_user.id] = new_user
+            clip.current_node_id = new_user.id
+
+        # Create assistant child and send to LLM
+        new_assistant = ConversationNode(
+            id=str(uuid.uuid4()), role="assistant", content="",
+            reasoning="", parent_id=new_user.id, source="llm",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+        clip.add_child_node(new_user.id, new_assistant)
+
+        self._chat_view.load_clip(clip, self._project.system_prompt if self._project else "")
+        saved = clip.current_node_id
+        clip.current_node_id = new_user.id
+        messages = self._build_messages_from_tree(clip)
+        clip.current_node_id = saved
+
+        new_bubble = self._chat_view.get_last_assistant_bubble()
+        request_clip = clip
+
+        streaming_content: list[str] = []
+        thinking_start: float | None = None
+        import time as _time
+
+        def _on_chunk(content: str, reasoning: str) -> None:
+            nonlocal thinking_start
+            if self._active_clip is not request_clip:
+                return
+            if reasoning:
+                if thinking_start is None:
+                    thinking_start = _time.monotonic()
+                if new_bubble:
+                    new_bubble.append_thinking(reasoning)
+            if content and new_bubble:
+                new_bubble.append_content(content)
+            self._chat_view.scroll_to_bottom()
+
+        def _on_stream_done() -> None:
+            final_text = new_bubble.finalize() if new_bubble else ""
+            if self._active_clip is request_clip and new_bubble:
+                thinking_text = new_bubble.get_thinking_text()
+                duration = (_time.monotonic() - thinking_start) if thinking_start else 0.0
+                new_assistant.content = final_text
+                new_assistant.reasoning = thinking_text
+                new_assistant.thinking_duration = duration
+                annotations, discussion = _parse_annotation_tags(final_text)
+                new_assistant.annotations = annotations
+                new_assistant.annotation_selected = [False] * len(annotations)
+                new_bubble.set_annotations(annotations, discussion, new_assistant.annotation_selected)
+                if thinking_text:
+                    new_bubble.collapse_thinking(duration)
+                clip.prompt = final_text
+                self._chat_view.set_streaming_mode(False)
+                self._chat_view.load_clip(clip, self._project.system_prompt if self._project else "")
+                self._save_project()
+                self.status_message.emit(tr("annotation.llm_done"))
+
+        def _on_llm_ok(text: str) -> None:
+            if self._active_clip is request_clip and new_bubble:
+                new_assistant.content = text
+                new_bubble._content_label.setText(text)
+                annotations, discussion = _parse_annotation_tags(text)
+                new_assistant.annotations = annotations
+                new_assistant.annotation_selected = [False] * len(annotations)
+                new_bubble.set_annotations(annotations, discussion, new_assistant.annotation_selected)
+                clip.prompt = text
+                self._chat_view.set_streaming_mode(False)
+                self._chat_view.load_clip(clip, self._project.system_prompt if self._project else "")
+                self._save_project()
+                self.status_message.emit(tr("annotation.llm_done"))
+
+        def _on_llm_fail(error: str) -> None:
+            self._chat_view.set_streaming_mode(False)
+            self.status_message.emit(tr("annotation.llm_error", error=error))
+
+        self._chat_view.set_streaming_mode(True)
+        self._llm_panel._connect_streaming(_on_chunk, _on_stream_done)
+        self._llm_panel.call_llm(messages=messages, on_result=_on_llm_ok, on_error=_on_llm_fail)
+
+    def _on_show_raw_output(self, node_id: str) -> None:
+        """Open a dialog showing the raw LLM output for debugging."""
+        clip = self._active_clip
+        if clip is None or node_id not in clip.tree_nodes:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Raw LLM Output")
+        dlg.resize(600, 450)
+        lay = QVBoxLayout(dlg)
+        edit = QPlainTextEdit(dlg)
+        edit.setReadOnly(True)
+        edit.setPlainText(clip.tree_nodes[node_id].content)
+        lay.addWidget(edit)
+        dlg.exec()
+
+    def _on_add_manual_annotation(self) -> None:
+        """Open a dialog for writing a manual annotation, inserted as an assistant node."""
         if self._active_clip is None or self._project is None:
-            self.status_message.emit(tr("annotation.no_clip_selected"))
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle(tr("annotation.add_manual_title"))
+        dlg.resize(500, 350)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(tr("annotation.add_manual_prompt")))
+        edit = QPlainTextEdit(dlg)
+        edit.setPlaceholderText(tr("annotation.add_manual_placeholder"))
+        lay.addWidget(edit)
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.accepted.connect(dlg.accept)
+        btn_box.rejected.connect(dlg.reject)
+        lay.addWidget(btn_box)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        text = edit.toPlainText().strip()
+        if not text:
+            return
+
+        import uuid
+        from datetime import datetime, timezone
+        from easyclip.annotation.project import ConversationNode
+
+        clip = self._active_clip
+        self._push_undo()
+
+        manual_node = ConversationNode(
+            id=str(uuid.uuid4()),
+            role="assistant",
+            content=text,
+            source="manual",
+            parent_id=clip.current_node_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+        clip.add_child_node(clip.current_node_id, manual_node)
+
+        self._save_project()
+        self._chat_view.load_clip(
+            clip, self._project.system_prompt if self._project else ""
+        )
+        self._chat_view._show_add_manual_button()
+
+    def _on_annotation_edit(self, node_id: str, index: int) -> None:
+        clip = self._active_clip
+        if clip is None or node_id not in clip.tree_nodes:
+            return
+        node = clip.tree_nodes[node_id]
+        if index >= len(node.annotations):
+            return
+        old_text = node.annotations[index]
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Edit Annotation")
+        dlg.resize(500, 300)
+        lay = QVBoxLayout(dlg)
+        edit = QPlainTextEdit(dlg)
+        edit.setPlainText(old_text)
+        lay.addWidget(edit)
+        btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        btn_box.accepted.connect(dlg.accept)
+        btn_box.rejected.connect(dlg.reject)
+        lay.addWidget(btn_box)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_text = edit.toPlainText().strip()
+        if not new_text or new_text == old_text:
+            return
+        self._push_undo()
+        # Update annotation text
+        node.annotations[index] = new_text
+        # Update the <annotation> block in raw content
+        old_block = f"<annotation>{old_text}</annotation>"
+        new_block = f"<annotation>{new_text}</annotation>"
+        node.content = node.content.replace(old_block, new_block, 1)
+        self._save_project()
+        # Refresh chat display
+        self._chat_view.load_clip(clip, self._project.system_prompt if self._project else "")
+        self._chat_view._show_add_manual_button() if not node.annotations else self._chat_view._hide_add_manual_button()
+
+    def _on_annotation_select_toggled(self, node_id: str, index: int, selected: bool) -> None:
+        clip = self._active_clip
+        if clip is None or node_id not in clip.tree_nodes:
+            return
+        node = clip.tree_nodes[node_id]
+        if index >= len(node.annotation_selected):
+            return
+        self._push_undo()
+        if selected:
+            # Deselect previous
+            if clip.selected_annotation_node_id and clip.selected_annotation_node_id in clip.tree_nodes:
+                prev_node = clip.tree_nodes[clip.selected_annotation_node_id]
+                pi = clip.selected_annotation_index
+                if 0 <= pi < len(prev_node.annotation_selected):
+                    prev_node.annotation_selected[pi] = False
+            # Select current
+            node.annotation_selected[index] = True
+            clip.selected_annotation_node_id = node_id
+            clip.selected_annotation_index = index
+            clip.prompt = node.annotations[index]
+            self._write_clip_prompt_txt(clip)
+        else:
+            node.annotation_selected[index] = False
+            clip.selected_annotation_node_id = None
+            clip.selected_annotation_index = -1
+            # Clear .txt
+            txt_path = self._clip_prompt_txt_path(clip)
+            if txt_path.is_file():
+                txt_path.unlink()
+        self._save_project()
+        # Refresh chat display to show gold border
+        self._chat_view.load_clip(clip, self._project.system_prompt if self._project else "")
+
+    def _on_chat_send(self, text: str) -> None:
+        """User typed a message and clicked Send."""
+        if self._active_clip is None or self._project is None:
             return
         preset = self._llm_panel.active_preset()
         if preset is None:
@@ -2188,232 +2499,375 @@ class AnnotationPage(QWidget):
 
         self._push_undo()
 
-        # Sync draft editors back to annotations before building content
-        self._annotation_editor.sync_to_clip(self._active_clip)
+        # Sync draft editors to annotations
 
-        include_images = True
+        is_omni = preset.is_omni_model
+        clip_video_path = str(self._project.resolve_clip_path(self._active_clip))
         project_dir = self._project.project_dir
-        content = build_llm_content(
+
+        # Build user content: frame images/video + subtitles
+        frame_content = build_llm_content(
             self._active_clip.annotations,
-            self._active_clip.draft_prompt,
             self._subtitle_track,
-            include_images,
-            project_dir,
+            include_images=not is_omni,
+            project_dir=project_dir,
+            omni_mode=is_omni,
+            clip_video_path=clip_video_path,
+            omni_media_format=preset.omni_media_format,
+        )
+        _log_llm_prompt(frame_content, self._project.system_prompt)
+
+        # Append user text to content parts if provided
+        if text.strip():
+            if isinstance(frame_content, list):
+                frame_content.append({"type": "text", "text": text})
+
+        import uuid
+        from datetime import datetime, timezone
+        from easyclip.annotation.project import ConversationNode
+
+        clip = self._active_clip
+
+        # Commit current annotations as a snapshot for this message
+        annotation_snapshot = clip.commit_annotations_snapshot()
+
+        # Create user node
+        user_node = ConversationNode(
+            id=str(uuid.uuid4()),
+            role="user",
+            content=text,
+            content_parts=frame_content,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            annotation_snapshot=annotation_snapshot,
         )
 
-        # Debug: print raw prompt to console
-        _log_llm_prompt(content, self._project.system_prompt)
+        clip = self._active_clip
+        if clip.root_node_id is None:
+            # First message — becomes root
+            clip.tree_nodes[user_node.id] = user_node
+            clip.root_node_id = user_node.id
+            clip.current_node_id = user_node.id
+        else:
+            # Append to tree
+            clip.add_child_node(clip.current_node_id, user_node)
 
-        system_prompt = self._project.system_prompt
+        self._chat_view.add_user_bubble(user_node)
 
-        # Capture the clip that initiated this request.
-        # If the user switches clips before the response arrives, the
-        # result is discarded to avoid writing to the wrong clip.
-        request_clip = self._active_clip
+        # Build messages from conversation path
+        messages = self._build_messages_from_tree(clip)
 
-        def _on_llm_ok(text: str) -> None:
-            # Only apply if the user hasn't switched to a different clip
-            if self._active_clip is request_clip:
-                self._on_llm_result(text)
+        # Create pending assistant node
+        assistant_node = ConversationNode(
+            id=str(uuid.uuid4()),
+            role="assistant",
+            content="",
+            reasoning="",
+            parent_id=user_node.id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            source="llm",
+        )
+        clip.add_child_node(user_node.id, assistant_node)
 
-        def _on_llm_fail(error: str) -> None:
-            # Always show errors regardless of clip switch
-            self._on_llm_error(error)
+        # Add empty assistant bubble for streaming
+        assistant_bubble = self._chat_view.add_assistant_bubble(assistant_node)
 
-        # Streaming handlers — append-only; never replace, only grow
+        request_clip = clip
+
+        # Streaming state
         streaming_content: list[str] = []
-        _reasoning_parts: list[str] = []          # pending reasoning deltas
-        _content_shown: list[int] = [0]           # chars of content already written
-        _locked: list[bool] = [False]             # prefix locked = content started
-        _header_written: list[bool] = [False]
-
-        def _do_append(text: str) -> tuple[int, int]:
-            """Append *text* at end; returns (old_scroll, old_max)."""
-            sb = self._prompt_edit.verticalScrollBar()
-            saved = (sb.value(), sb.maximum()) if sb is not None else (0, 0)
-            cursor = self._prompt_edit.textCursor()
-            cursor.beginEditBlock()
-            cursor.movePosition(cursor.MoveOperation.End)
-            cursor.insertText(text)
-            cursor.endEditBlock()
-            return saved
-
-        def _restore_scroll(saved: tuple[int, int], *, at_bottom: bool) -> None:
-            """Restore scroll: chase bottom if *at_bottom*, else keep old position."""
-            sb = self._prompt_edit.verticalScrollBar()
-            if sb is None:
-                return
-            if at_bottom:
-                sb.setValue(sb.maximum())
-            else:
-                # Clamp: new content may be shorter (e.g. during lock transition)
-                sb.setValue(min(saved[0], sb.maximum()))
+        _reasoning_parts: list[str] = []
+        thinking_start: float | None = None
+        import time as _time
 
         def _on_chunk(content: str, reasoning: str) -> None:
+            nonlocal thinking_start
             if self._active_clip is not request_clip:
                 return
-            if content:
-                streaming_content.append(content)
             if reasoning:
-                _reasoning_parts.append(reasoning)
-
-            self._prompt_edit.setReadOnly(True)
-            sb = self._prompt_edit.verticalScrollBar()
-            at_bottom = sb is not None and sb.value() >= sb.maximum()
-
-            if not _header_written[0]:
-                _header_written[0] = True
-                self._prompt_edit.setPlainText("〔思考中…〕\n")
-
-            if not _locked[0]:
-                # Append new reasoning deltas as they arrive
-                while _reasoning_parts:
-                    saved = _do_append(_reasoning_parts.pop(0))
-                    _restore_scroll(saved, at_bottom=at_bottom)
-
-                if streaming_content:
-                    # Lock: append separator + all content so far
-                    _locked[0] = True
-                    sep = "\n───\n" if _reasoning_parts or _header_written[0] else ""
-                    saved = _do_append(sep + "".join(streaming_content))
-                    _content_shown[0] = len(streaming_content)
-                    _restore_scroll(saved, at_bottom=at_bottom)
-                return
-
-            # Post-lock: append new content only
-            c_all = "".join(streaming_content)
-            new_c = c_all[_content_shown[0]:]
-            if new_c:
-                saved = _do_append(new_c)
-                _content_shown[0] = len(c_all)
-                _restore_scroll(saved, at_bottom=at_bottom)
+                if thinking_start is None:
+                    thinking_start = _time.monotonic()
+                assistant_bubble.append_thinking(reasoning)
+            if content:
+                assistant_bubble.append_content(content)
+            self._chat_view.scroll_to_bottom()
 
         def _on_stream_done() -> None:
-            final_text = "".join(streaming_content)
+            final_text = assistant_bubble.finalize()
             if self._active_clip is request_clip:
-                self._on_streaming_complete(final_text)
+                thinking_text = assistant_bubble.get_thinking_text()
+                duration = (_time.monotonic() - thinking_start) if thinking_start else 0.0
+                assistant_node.content = final_text
+                annotations, discussion = _parse_annotation_tags(final_text)
+                assistant_node.annotations = annotations
+                assistant_node.annotation_selected = [False] * len(annotations)
+                assistant_bubble.set_annotations(annotations, discussion, assistant_node.annotation_selected)
+                if annotations:
+                    self._chat_view._hide_add_manual_button()
+                else:
+                    self._chat_view._show_add_manual_button()
+                assistant_node.reasoning = thinking_text
+                assistant_node.thinking_duration = duration
+                if thinking_text:
+                    assistant_bubble.collapse_thinking(duration)
+                # Update prompt from final assistant content
+                clip.prompt = final_text
+                self._chat_view.set_streaming_mode(False)
+                self._chat_view.set_context_handles([])
+                self._save_project()
+                self.status_message.emit(tr("annotation.llm_done"))
 
-        # Connect streaming signals — LLMPanel clears any prior connections
+        def _on_llm_ok(text: str) -> None:
+            if self._active_clip is request_clip:
+                assistant_node.content = text
+                annotations, discussion = _parse_annotation_tags(text)
+                assistant_node.annotations = annotations
+                assistant_node.annotation_selected = [False] * len(annotations)
+                assistant_bubble.set_annotations(annotations, discussion, assistant_node.annotation_selected)
+                if annotations:
+                    self._chat_view._hide_add_manual_button()
+                else:
+                    self._chat_view._show_add_manual_button()
+                clip.prompt = text
+                self._chat_view.set_streaming_mode(False)
+                self._chat_view.set_context_handles([])
+                self._save_project()
+                self.status_message.emit(tr("annotation.llm_done"))
+
+        def _on_llm_fail(error: str) -> None:
+            self._chat_view.set_streaming_mode(False)
+            self.status_message.emit(tr("annotation.llm_error", error=error))
+
+        self._chat_view.set_streaming_mode(True)
         self._llm_panel._connect_streaming(_on_chunk, _on_stream_done)
-
         self._llm_panel.call_llm(
-            system_prompt=system_prompt,
-            content=content,
+            messages=messages,
             on_result=_on_llm_ok,
             on_error=_on_llm_fail,
         )
 
-    def _on_preview_draft(self) -> None:
-        """Show a popup with the assembled draft text (text-only, no images)."""
-        if self._active_clip is None:
+    def _build_messages_from_tree(self, clip: AnnotatedClip) -> list[dict]:
+        messages: list[dict] = []
+        if self._project and self._project.system_prompt:
+            sp = self._project.system_prompt + "\n\nWrap each annotation output in <annotation>...</annotation> tags. Any text outside the tags is discussion."
+            messages.append({"role": "system", "content": sp})
+        elif self._project:
+            messages.append({"role": "system", "content": "Wrap each annotation output in <annotation>...</annotation> tags."})
+        for node_id in clip.conversation_path():
+            node = clip.tree_nodes.get(node_id)
+            if node is None:
+                continue
+            if node.role == "user":
+                if node.content_parts:
+                    messages.append({"role": "user", "content": node.content_parts})
+                else:
+                    messages.append({"role": "user", "content": node.content})
+            elif node.role == "assistant" and node.content:
+                messages.append({"role": "assistant", "content": node.content})
+        return messages
+
+    def _on_regenerate_requested(self, node_id: str) -> None:
+        clip = self._active_clip
+        if clip is None or self._project is None:
             return
-        # Sync draft editors back to annotations before building
-        self._annotation_editor.sync_to_clip(self._active_clip)
-        text = self._annotation_editor.build_text_prompt()
-        if not text.strip():
-            text = tr("annotation.preview_draft_empty")
+        node = clip.tree_nodes.get(node_id)
+        if node is None or node.role != "assistant":
+            return
 
-        dlg = QDialog(self)
-        dlg.setWindowTitle(tr("annotation.preview_draft"))
-        dlg.resize(600, 400)
-        lay = QVBoxLayout(dlg)
-        edit = QPlainTextEdit(dlg)
-        edit.setReadOnly(True)
-        edit.setPlainText(text)
-        lay.addWidget(edit)
-        dlg.exec()
+        # Confirmation
+        box = QMessageBox(self)
+        box.setWindowTitle(tr("annotation.chat.regenerate_confirm_title"))
+        box.setText(tr("annotation.chat.regenerate_confirm_body"))
+        btn_ok = box.addButton(tr("annotation.chat.regenerate"), QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(btn_ok)
+        box.exec()
+        if box.clickedButton() != btn_ok:
+            return
 
-    @staticmethod
-    def _strip_thinking(text: str) -> str:
-        """Remove ``<think>...</think>`` blocks from model output."""
-        return re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
+        self._push_undo()
 
-    def _on_llm_result(self, text: str) -> None:
-        cleaned = self._strip_thinking(text)
-        self._prompt_edit.setPlainText(cleaned)
-        self._append_llm_version(cleaned)
-        self.status_message.emit(tr("annotation.llm_done"))
+        import uuid
+        from datetime import datetime, timezone
+        from easyclip.annotation.project import ConversationNode
 
-    def _on_llm_error(self, error: str) -> None:
-        self.status_message.emit(tr("annotation.llm_error", error=error))
+        # Build messages up to the parent user node (exclude current assistant)
+        parent_id = node.parent_id
+        # Temporarily set current_node_id to parent to build correct messages
+        saved_current = clip.current_node_id
+        clip.current_node_id = parent_id
+        messages = self._build_messages_from_tree(clip)
+        clip.current_node_id = saved_current  # restore
 
-    def _on_streaming_complete(self, final_text: str) -> None:
-        """Streaming finished — strip thinking, show clean content only."""
-        cleaned = self._strip_thinking(final_text)
-        self._prompt_edit.setReadOnly(False)
-        self._prompt_edit.setPlainText(cleaned)
-        self._append_llm_version(cleaned)
-        self.status_message.emit(tr("annotation.llm_done"))
+        # Create new assistant node as sibling
+        new_assistant = ConversationNode(
+            id=str(uuid.uuid4()),
+            role="assistant",
+            content="",
+            reasoning="",
+            parent_id=parent_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            source="llm",
+        )
+        clip.add_child_node(parent_id, new_assistant)
+
+        # Rebuild chat view to show the new branch
+        self._chat_view.load_clip(clip, self._project.system_prompt if self._project else "")
+
+        # Find the newly added assistant bubble
+        new_bubble = self._chat_view.get_last_assistant_bubble()
+        if new_bubble is None:
+            return
+
+        request_clip = clip
+        thinking_start: float | None = None
+        import time as _time
+
+        def _on_chunk(content: str, reasoning: str) -> None:
+            nonlocal thinking_start
+            if self._active_clip is not request_clip:
+                return
+            if reasoning:
+                if thinking_start is None:
+                    thinking_start = _time.monotonic()
+                new_bubble.append_thinking(reasoning)
+            if content:
+                new_bubble.append_content(content)
+            self._chat_view.scroll_to_bottom()
+
+        def _on_stream_done() -> None:
+            final_text = new_bubble.finalize()
+            if self._active_clip is request_clip:
+                thinking_text = new_bubble.get_thinking_text()
+                duration = (_time.monotonic() - thinking_start) if thinking_start else 0.0
+                new_assistant.content = final_text
+                annotations, discussion = _parse_annotation_tags(final_text)
+                new_assistant.annotations = annotations
+                new_assistant.annotation_selected = [False] * len(annotations)
+                new_assistant.reasoning = thinking_text
+                new_assistant.thinking_duration = duration
+                if thinking_text:
+                    new_bubble.collapse_thinking(duration)
+                clip.prompt = final_text
+                self._chat_view.set_streaming_mode(False)
+                # Reload to update branch nav on the sibling bubbles
+                self._chat_view.load_clip(clip, self._project.system_prompt if self._project else "")
+                if annotations:
+                    self._chat_view._hide_add_manual_button()
+                else:
+                    self._chat_view._show_add_manual_button()
+                self._save_project()
+                self.status_message.emit(tr("annotation.llm_done"))
+
+        def _on_llm_ok(text: str) -> None:
+            if self._active_clip is request_clip:
+                new_assistant.content = text
+                annotations, discussion = _parse_annotation_tags(text)
+                new_assistant.annotations = annotations
+                new_assistant.annotation_selected = [False] * len(annotations)
+                clip.prompt = text
+                self._chat_view.set_streaming_mode(False)
+                self._chat_view.load_clip(clip, self._project.system_prompt if self._project else "")
+                if annotations:
+                    self._chat_view._hide_add_manual_button()
+                else:
+                    self._chat_view._show_add_manual_button()
+                self._save_project()
+                self.status_message.emit(tr("annotation.llm_done"))
+
+        def _on_llm_fail(error: str) -> None:
+            self._chat_view.set_streaming_mode(False)
+            self.status_message.emit(tr("annotation.llm_error", error=error))
+
+        self._chat_view.set_streaming_mode(True)
+        self._llm_panel._connect_streaming(_on_chunk, _on_stream_done)
+        self._llm_panel.call_llm(
+            messages=messages,
+            on_result=_on_llm_ok,
+            on_error=_on_llm_fail,
+        )
+
+    def _on_branch_navigated(self, node_id: str, direction: int) -> None:
+        clip = self._active_clip
+        if clip is None:
+            return
+        # Try navigating among own children first, then siblings
+        node = clip.tree_nodes.get(node_id)
+        if node and len(node.children_ids) > 1:
+            clip.navigate_children(node_id, direction)
+        else:
+            clip.navigate_sibling(node_id, direction)
+        clip.rebuild_annotations_from_path()
+        self._refresh_editor_from_clip()
+        self._save_project()
 
 
 # ── Module-level helpers for LLM content building ────────────────────
 
 
+def _parse_annotation_tags(text: str) -> tuple[list[str], str]:
+    # Strip <think> blocks first — they may contain <annotation> literals
+    clean = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+    # Match <annotation> only at line start (avoids false matches on mentions like "use <annotation>")
+    annotations = re.findall(r'(?m)^\s*<annotation>\s*(.*?)\s*</annotation>', clean, re.DOTALL)
+    annotations = [a.strip() for a in annotations]
+    discussion = re.sub(r'(?m)^\s*<annotation>.*?</annotation>\s*', '', clean, flags=re.DOTALL).strip()
+    return annotations, discussion
+
+
 def build_llm_content(
     annotations: list[FrameAnnotation],
-    global_draft: str,
     subtitles: SubtitleTrack | None,
     include_images: bool,
     project_dir: str,
+    *,
+    omni_mode: bool = False,
+    clip_video_path: str | None = None,
+    omni_media_format: str = "qwen_omni",
 ) -> list[dict]:
-    """Build an interleaved content array for OpenAI-compatible API calls.
+    """Build a content array for OpenAI-compatible API calls.
 
-    Order per frame: image → frame_text → transition_text → next image → ...
-
-    Args:
-        annotations: Sorted by frame_index.
-        global_draft: Clip-level description (skipped if empty/whitespace).
-        subtitles: Subtitle track for context (optional).
-        include_images: Include base64-encoded PNG images (VLM mode).
-        project_dir: Project root for resolving relative image paths.
-
-    Returns:
-        A list of ``{"type": "image_url", ...}`` and ``{"type": "text", ...}`` dicts.
+    VLM mode (omni_mode=False): frame images only.
+    Omni mode (omni_mode=True):  full clip video+audio only.
+    Subtitles are appended as text context when available.
+    The user's chat text is appended separately by the caller.
     """
     content: list[dict] = []
     proj_path = Path(project_dir)
 
-    for i, fa in enumerate(annotations):
-        # 1. Image (before frame text, so VLM sees image then reads description)
-        if include_images and fa.image_path:
-            img_path = proj_path / fa.image_path
-            if img_path.is_file():
-                b64 = base64.b64encode(img_path.read_bytes()).decode()
-                content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{b64}"},
-                })
-
-        # 2. Frame description text
-        if fa.draft_text.strip():
+    # ── Omni mode: prepend video as the first content part ──
+    if omni_mode and clip_video_path:
+        vpath = Path(clip_video_path)
+        if vpath.is_file():
+            vid_b64 = base64.b64encode(vpath.read_bytes()).decode()
             content.append({
-                "type": "text",
-                "text": f"Frame {fa.frame_index} ({fa.timestamp_sec:.1f}s): {fa.draft_text}",
+                "type": "video_url",
+                "video_url": {"url": f"data:video/mp4;base64,{vid_b64}"},
             })
 
-        # 3. Transition text (to next frame, if not last)
-        if i < len(annotations) - 1 and fa.transition_text.strip():
-            next_fa = annotations[i + 1]
-            content.append({
-                "type": "text",
-                "text": (
-                    f"→ Transition {fa.frame_index}→{next_fa.frame_index}"
-                    f" ({fa.timestamp_sec:.1f}s→{next_fa.timestamp_sec:.1f}s):"
-                    f" {fa.transition_text}"
-                ),
-            })
+    # ── VLM mode: interleaved frame labels + images ──
+    if not omni_mode:
+        for fa in annotations:
+            if include_images and fa.image_path:
+                img_path = proj_path / fa.image_path
+                if img_path.is_file():
+                    # Frame label before image helps the VLM correlate references
+                    content.append({
+                        "type": "text",
+                        "text": f"[Frame {fa.frame_index} ({fa.timestamp_sec:.1f}s)]",
+                    })
+                    b64 = base64.b64encode(img_path.read_bytes()).decode()
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{b64}"},
+                    })
 
-    # 4. Global context (only if non-empty)
-    if global_draft.strip():
-        content.append({"type": "text", "text": f"Clip context: {global_draft}"})
-
-    # 5. Subtitles
+    # ── Subtitles as context ──
     if subtitles and subtitles.entries:
         sub_text = " ".join(e.text for e in subtitles.entries[:50])
         if sub_text.strip():
             content.append({"type": "text", "text": f"Video subtitles: {sub_text}"})
 
-    # Fallback
+    # Fallback instruction
     if not content:
         content.append({
             "type": "text",
@@ -2437,9 +2891,14 @@ def _log_llm_prompt(content: list[dict], system_prompt: str = "") -> None:
 
     print("[USER CONTENT]")
     for i, block in enumerate(content):
-        if block.get("type") == "image_url":
+        t = block.get("type", "")
+        if t == "video_url":
+            b64_len = len(block.get("video_url", {}).get("url", ""))
+            kb = (b64_len - 37) * 3 // 4 // 1024  # approximate decoded size
+            print(f"  [{i}] 🎬 [Video clip, ~{kb} KB]")
+        elif t == "image_url":
             print(f"  [{i}] 🖼  [Frame image]")
-        elif block.get("type") == "text":
+        elif t == "text":
             text = block["text"]
             if len(text) > 500:
                 text = text[:500] + "..."
